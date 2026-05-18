@@ -55,7 +55,7 @@ async def test_reflex_dual_mock_scales_with_sim_time() -> None:
 # -- multi-session example ------------------------------------------------
 
 
-from reflex_dual_multi_session import run_multi_session  # noqa: E402
+from reflex_dual_multi_session import run_multi_session, run_with_early_unregister  # noqa: E402
 
 
 async def test_multi_session_isolation() -> None:
@@ -71,3 +71,16 @@ async def test_multi_session_isolation() -> None:
     for sid, log in logs.items():
         assert log.actions, f"session {sid!r} produced no actions"
     assert len(logs["long"].actions) > len(logs["short"].actions)
+
+
+async def test_multi_session_unregister_cancels_only_that_session() -> None:
+    """Calling unregister before duration is up exits the targeted session promptly.
+
+    A full 10-sim-second run would produce ~200 actions (S0_HZ * effective time).
+    An honoured unregister produces dramatically fewer — and importantly, the
+    test returns rather than hanging on the long duration.
+    """
+    log = await run_with_early_unregister(long_duration_s=10.0, cancel_after_s=0.0)
+    assert log.sid == "victim"
+    # Conservative bound: without unregister this would be ~200; with it, far fewer.
+    assert len(log.actions) < 100, f"unregister apparently not honored; got {len(log.actions)} actions"
