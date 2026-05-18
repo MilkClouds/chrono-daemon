@@ -57,7 +57,7 @@ ADR first.
   importable under `runlet.recipes.*`. Weaker stability guarantees than
   the core (see `src/runlet/recipes/__init__.py`).
 - `docs/recipes.md` — user-facing index for the above.
-- `docs/roadmap.md` — v0.x candidates and explicit no-goals.
+- `docs/roadmap.md` — planned next steps and explicit no-goals.
 - `examples/` — end-to-end demos exercised by CI (`tests/test_examples.py`).
 - `CLAUDE.md` (this file) — editing rules + commands only.
 - Top-level `README.md` — the 5-minute pitch.

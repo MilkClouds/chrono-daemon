@@ -1,7 +1,9 @@
 """Supervisor: shutdown propagation, restart with backoff, max_retries, cancel scope per daemon.
 
-Also covers v0.1 additions: duplicate-name warning, DaemonError wrapping
-exposing the failing daemon's name on the ExceptionGroup leaf.
+Also covers the diagnostics surface (duplicate-name warning, DaemonError
+wrapping that exposes the failing daemon's name on the ExceptionGroup leaf)
+and the stop-signaling surface (signal_stop, stop(grace), shielded on_stop
+on the force-cancel path).
 """
 
 from __future__ import annotations
@@ -139,6 +141,82 @@ async def test_restart_respects_max_retries() -> None:
     assert any(isinstance(e.__cause__, RuntimeError) for e in daemon_errs)
     # initial attempt + max_retries = 1 + 2 = 3 total tries.
     assert failing.attempts == 3
+
+
+async def test_signal_stop_lets_cooperative_daemons_exit() -> None:
+    """Daemons polling ctx.stopping in their loops should return naturally on signal_stop()."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _Polling(Daemon):
+        name = "polling"
+
+        async def run(self, ctx: Context) -> None:
+            log.append("started")
+            while not ctx.stopping:
+                await ctx.clock.sleep(0.01)
+            log.append("noticed-stopping")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_Polling())
+        await anyio.sleep(0)
+        await clock.advance(0.05)
+        sup.signal_stop()
+        # Advance further so the next sleep returns and the daemon checks stopping.
+        await clock.advance(0.05)
+
+    assert log == ["started", "noticed-stopping", "on_stop"]
+
+
+async def test_stop_force_cancels_blocked_daemons() -> None:
+    """Daemons not polling stopping get force-cancelled by stop(grace=0)."""
+    clock = SimClock()
+    seen: list[str] = []
+
+    class _Blocked(Daemon):
+        name = "blocked"
+
+        async def run(self, ctx: Context) -> None:
+            seen.append("running")
+            await ctx.clock.sleep(1_000_000)  # would hang forever under SimClock
+            seen.append("after-sleep")  # unreachable
+
+        async def on_stop(self, ctx: Context) -> None:
+            seen.append("on_stop")
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_Blocked())
+        await anyio.sleep(0)
+        await sup.stop(grace=0.0)
+
+    assert "running" in seen
+    assert "after-sleep" not in seen
+    # Forceful path still runs on_stop in a shielded scope.
+    assert "on_stop" in seen
+
+
+async def test_stop_is_idempotent() -> None:
+    """Calling stop() twice is safe."""
+    clock = SimClock()
+
+    class _Quick(Daemon):
+        async def run(self, ctx: Context) -> None:
+            pass
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_Quick())
+        await anyio.sleep(0)
+        await sup.stop(grace=0.0)
+        await sup.stop(grace=0.0)  # second call: no-op
+
+
+async def test_signal_stop_before_supervisor_entered_is_noop() -> None:
+    """signal_stop() called before __aenter__ is harmless."""
+    sup = Supervisor(clock=SimClock())
+    sup.signal_stop()  # should not raise; no event yet, just a no-op
 
 
 async def test_each_daemon_gets_its_own_cancel_scope() -> None:

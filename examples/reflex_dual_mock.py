@@ -8,13 +8,12 @@ time under ``SimClock``.
 Byte-equality across repeated runs holds on the asyncio backend; trio's
 default scheduler randomizes task-spawn order across runs, so cross-run logs
 on trio agree in length, in monotone time, and in distribution — but not
-bit-for-bit. See ``examples/README.md`` for the discussion and a sketch of
-the "ready gate" workaround.
+bit-for-bit. See ``examples/README.md`` for the discussion.
 
-The point of this example is to stress-test runlet's ergonomics on a realistic
-multi-rate reactive pattern. The post-mortem — what felt clean, what felt
-like boilerplate, where ``Supervisor.stop()`` is missed — is in
-``examples/README.md``.
+The ``driver`` daemon advances the SimClock by ``duration_s`` and then calls
+``ctx.supervisor.signal_stop()``. Every other daemon iterates with
+``cooperative_every`` so the stop signal terminates the pipeline naturally,
+with every ``on_stop`` running on the standard return path.
 
 Pipeline layout (rates are virtual under ``SimClock``):
 
@@ -39,10 +38,6 @@ Pipeline layout (rates are virtual under ``SimClock``):
                                                  │
                                                  ▼
                                          actuator (logs)
-
-The ``driver`` daemon advances the SimClock by ``duration_s`` and then raises
-``_PipelineDone`` to bring the supervisor down cleanly. See the post-mortem
-for the discussion of why an explicit ``Supervisor.stop()`` would be nicer.
 """
 
 from __future__ import annotations
@@ -53,7 +48,8 @@ from typing import Generic, TypeVar
 
 import anyio
 
-from runlet import Channel, Context, DaemonError, SimClock, Supervisor, daemon, open_channel
+from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel
+from runlet.recipes.cooperative_every import cooperative_every
 
 # --- data shapes ----------------------------------------------------------
 
@@ -125,7 +121,7 @@ S1_LATENCY = 0.02
 async def sensor(ctx: Context, obs_cache: Latest[Obs]) -> None:
     """Emit one Obs per 1/SENSOR_HZ second into the shared cache."""
     seq = 0
-    async for t in ctx.clock.every(1.0 / SENSOR_HZ):
+    async for t in cooperative_every(ctx, 1.0 / SENSOR_HZ):
         obs_cache.set(Obs(t=t, seq=seq))
         seq += 1
 
@@ -137,7 +133,7 @@ async def s2_planner(
     subgoal_cache: Latest[Subgoal],
 ) -> None:
     """Mock S2: every 1/S2_HZ second, plan a subgoal from the latest obs."""
-    async for _t in ctx.clock.every(1.0 / S2_HZ):
+    async for _t in cooperative_every(ctx, 1.0 / S2_HZ):
         obs = obs_cache.get()
         if obs is None:
             continue
@@ -157,15 +153,22 @@ async def s1_policy(
     subgoal_cache: Latest[Subgoal],
     chunk_out: Channel[Chunk],
 ) -> None:
-    """Mock S1: every 1/S1_HZ second, produce an action chunk from latest obs+subgoal."""
-    async for _t in ctx.clock.every(1.0 / S1_HZ):
-        obs = obs_cache.get()
-        sg = subgoal_cache.get()
-        if obs is None or sg is None:
-            continue
-        await ctx.clock.sleep(S1_LATENCY)  # mock model forward
-        actions = tuple(sg.target + 0.01 * i + obs.t * 0.001 for i in range(CHUNK_SIZE))
-        await chunk_out.send.send(Chunk(actions=actions, cog=sg.cog, t_emitted=ctx.clock.now()))
+    """Mock S1: every 1/S1_HZ second, produce an action chunk from latest obs+subgoal.
+
+    Closes ``chunk_out.send`` on the way out so downstream daemons see
+    ``EndOfStream`` and can exit on their own ``async for``.
+    """
+    try:
+        async for _t in cooperative_every(ctx, 1.0 / S1_HZ):
+            obs = obs_cache.get()
+            sg = subgoal_cache.get()
+            if obs is None or sg is None:
+                continue
+            await ctx.clock.sleep(S1_LATENCY)  # mock model forward
+            actions = tuple(sg.target + 0.01 * i + obs.t * 0.001 for i in range(CHUNK_SIZE))
+            await chunk_out.send.send(Chunk(actions=actions, cog=sg.cog, t_emitted=ctx.clock.now()))
+    finally:
+        await chunk_out.send.aclose()
 
 
 @daemon
@@ -174,12 +177,21 @@ async def s0_dispenser(
     chunk_in: Channel[Chunk],
     action_out: Channel[Action],
 ) -> None:
-    """Pop chunks; dispense each action at 1/S0_HZ second."""
+    """Pop chunks; dispense each action at 1/S0_HZ second.
+
+    Polls ``ctx.stopping`` mid-chunk so a long chunk doesn't delay shutdown.
+    Closes ``action_out.send`` so the actuator exits when we do.
+    """
     period = 1.0 / S0_HZ
-    async for chunk in chunk_in.recv:
-        for cmd in chunk.actions:
-            await action_out.send.send(Action(cmd=cmd, cog=chunk.cog, t_dispensed=ctx.clock.now()))
-            await ctx.clock.sleep(period)
+    try:
+        async for chunk in chunk_in.recv:
+            for cmd in chunk.actions:
+                if ctx.stopping:
+                    return
+                await action_out.send.send(Action(cmd=cmd, cog=chunk.cog, t_dispensed=ctx.clock.now()))
+                await ctx.clock.sleep(period)
+    finally:
+        await action_out.send.aclose()
 
 
 @daemon
@@ -188,52 +200,27 @@ async def actuator(
     action_in: Channel[Action],
     log: list[Action],
 ) -> None:
-    """Drain action stream into ``log`` for downstream assertions."""
+    """Drain action stream into ``log`` for downstream assertions.
+
+    Terminates naturally when ``action_in.send`` is closed (cascading from
+    ``s0_dispenser`` after stop signaling).
+    """
     async for action in action_in.recv:
         log.append(action)
-
-
-# --- the bit where v0 misses a Supervisor.stop() --------------------------
-
-
-class _PipelineDone(Exception):
-    """Sentinel raised by ``driver`` to terminate the supervisor cleanly.
-
-    Until ``Supervisor.stop()`` exists (see roadmap), this is the cleanest
-    way to bring a pipeline of infinite-loop daemons down: have a driver
-    daemon raise, let ``on_error="shutdown"`` cancel the rest, and catch the
-    expected leaf at the call site.
-    """
-
-
-@daemon
-async def driver(ctx: Context, duration_s: float) -> None:
-    """Advance virtual time by ``duration_s``, then end the run."""
-    await anyio.sleep(0)  # let sibling daemons register their first sleep
-    await ctx.clock.advance(duration_s)
-    raise _PipelineDone
 
 
 # --- entry point ----------------------------------------------------------
 
 
-def _is_pipeline_done(exc: BaseException) -> bool:
-    if isinstance(exc, _PipelineDone):
-        return True
-    # Supervisor wraps the daemon exception in DaemonError (ADR 0008) so the
-    # failing daemon's name reaches the group leaf — but the sentinel we care
-    # about is on __cause__.
-    if isinstance(exc, DaemonError) and isinstance(exc.__cause__, _PipelineDone):
-        return True
-    if isinstance(exc, BaseExceptionGroup):
-        return all(_is_pipeline_done(e) for e in exc.exceptions)
-    return False
-
-
 async def run_mock(duration_s: float = 2.0) -> list[Action]:
     """Run the mock pipeline for ``duration_s`` virtual seconds.
 
-    Returns the actuator log. Deterministic across runs and backends.
+    The supervisor's main task drives the SimClock and then calls
+    ``await sup.stop(grace=0)`` to force-cancel any daemon still sleeping
+    on the (now-frozen) sim clock. Each daemon's ``try/finally`` closes its
+    downstream channel so the actuator drains cleanly.
+
+    Returns the actuator log. Deterministic across runs on the asyncio backend.
     """
     clock = SimClock()
     obs_cache: Latest[Obs] = Latest()
@@ -242,18 +229,16 @@ async def run_mock(duration_s: float = 2.0) -> list[Action]:
     action_channel: Channel[Action] = open_channel(maxsize=64)
     log: list[Action] = []
 
-    try:
-        async with Supervisor(clock=clock) as sup:
-            sup.add(sensor(obs_cache))
-            sup.add(s2_planner(obs_cache, subgoal_cache))
-            sup.add(s1_policy(obs_cache, subgoal_cache, chunk_channel))
-            sup.add(s0_dispenser(chunk_channel, action_channel))
-            sup.add(actuator(action_channel, log))
-            sup.add(driver(duration_s))
-    except BaseExceptionGroup as eg:
-        # Anything other than _PipelineDone is a real error; re-raise it.
-        if not _is_pipeline_done(eg):
-            raise
+    async with Supervisor(clock=clock) as sup:
+        sup.add(sensor(obs_cache))
+        sup.add(s2_planner(obs_cache, subgoal_cache))
+        sup.add(s1_policy(obs_cache, subgoal_cache, chunk_channel))
+        sup.add(s0_dispenser(chunk_channel, action_channel))
+        sup.add(actuator(action_channel, log))
+        # Drive the SimClock from the main task, then force-cancel.
+        await anyio.sleep(0)
+        await clock.advance(duration_s)
+        await sup.stop(grace=0.0)
 
     return log
 

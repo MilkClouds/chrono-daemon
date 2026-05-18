@@ -1,10 +1,10 @@
 # Roadmap
 
-What is planned for v0.x, and what is deliberately deferred or rejected. New
+What is planned next, and what is deliberately deferred or rejected. New
 items are added here when an ADR records the decision to defer rather than
 ship.
 
-## v0.x — under consideration
+## Under consideration
 
 - **`ready_gate` recipe and/or first-class primitive.** trio's default
   scheduler randomizes task-spawn ordering across runs, which limits the
@@ -27,14 +27,6 @@ ship.
   `async def test_foo(supervisor: Supervisor, sim_clock: SimClock): ...`
   with the boilerplate of "enter supervisor, advance clock, exit cleanly"
   pre-baked. Would shave ~10 LOC off every integration test.
-- **`Supervisor.stop()` / explicit external shutdown.** Today the only ways
-  to stop a running supervisor are to raise from inside a daemon or to
-  cancel the outer task. A `stop()` method that signals a graceful
-  shutdown event would be useful for signal handlers and embedded use.
-- **Graceful-shutdown timeout.** `anyio.TaskGroup` has no built-in
-  "give daemons N seconds to clean up, then force-cancel" mechanism. We can
-  wrap `on_stop` in a `move_on_after`, but this needs a deliberate API
-  decision (per-daemon? per-supervisor? configurable?).
 - **Restart history / liveness introspection.** Restart counts, last error,
   uptime per daemon. Just enough for an operator to ask "is this daemon
   flapping?" without instrumenting from scratch.

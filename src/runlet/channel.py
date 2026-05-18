@@ -8,7 +8,7 @@ broadcast a single source to N consumers, they write an explicit ``tee`` themsel
 
 Closing the send side propagates ``EndOfStream`` to all waiting receivers.
 
-The two endpoints are Protocols so future v0.x transport adapters (multiprocess,
+The two endpoints are Protocols so future transport adapters (multiprocess,
 network) can plug in without breaking the API.
 """
 

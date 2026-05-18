@@ -1,16 +1,16 @@
-# ADR 0008 — Sim-time-aware logging and supervisor diagnostics (v0.1)
+# ADR 0008 — Sim-time-aware logging and supervisor diagnostics
 
 Status: Accepted (2026-05-18)
 
 ## Context
 
-v0 shipped `Channel`, `Clock` (Wall/Sim), `Daemon`, and `Supervisor` with the
-minimum surface required to run a deterministic burst-replay scenario.
-Building the `examples/reflex_dual_mock.py` pipeline (PR #191 architecture,
-mocked) and re-reading the API surface against ROS2, dora-rs, and Apollo
-CyberRT surfaced four small but non-deferable gaps. Each is a diagnostic
-hole that makes the library's headline capability (sim-time replay) harder
-to actually use:
+The initial four-primitive core (`Channel`, `Clock`, `Daemon`, `Supervisor`)
+shipped the minimum surface required to run a deterministic burst-replay
+scenario. Building the `examples/reflex_dual_mock.py` pipeline
+(PR #191 architecture, mocked) and re-reading the API surface against
+ROS2, dora-rs, and Apollo CyberRT surfaced four small but non-deferable
+gaps. Each is a diagnostic hole that makes the library's headline
+capability (sim-time replay) harder to actually use:
 
 1. `Context.logger` was plain stdlib `logging.Logger`. Records carried only
    wall-clock timestamps, so a `SimClock` run produced log lines all
@@ -31,7 +31,8 @@ to actually use:
    private-attribute access.
 
 None of these is a no-goal (CLAUDE.md slot); they were genuine omissions
-that the v0 plan didn't anticipate. They form a coherent v0.1 deliverable.
+that the initial plan didn't anticipate. They form a coherent diagnostics
+package.
 
 ## Decision
 
@@ -76,7 +77,7 @@ Four targeted additions, each ~10-30 LOC:
   confusing log.
 + Channel diagnostics are a one-call away; backpressure debugging no
   longer requires private-attribute spelunking.
-+ All changes are additive. Existing v0 code keeps working unchanged.
++ All changes are additive. Existing code keeps working unchanged.
 - `Context.logger`'s declared type widens from `Logger` to
   `Logger | ClockAwareLoggerAdapter`. Code that called
   `logger.setLevel(...)` etc. still works (adapter forwards), but type
@@ -97,5 +98,5 @@ Four targeted additions, each ~10-30 LOC:
 - ADR 0004 — `on_error="shutdown"` is the default; wrapping in `DaemonError`
   is how the daemon's identity survives that path.
 - ADR 0006 — `ChannelStats` is part of the transport-agnostic Protocol
-  surface; future v0.x transports must implement `statistics()`.
+  surface; future transports must implement `statistics()`.
 - `examples/README.md` — the post-mortem that surfaced these four gaps.

@@ -24,7 +24,7 @@ enough.
 
 Time is reached through a `Clock` protocol with three methods: `now() -> float`,
 `async sleep(seconds)`, and `every(period) -> AsyncIterator[float]`. Two
-implementations ship in v0:
+implementations are provided:
 
 - `WallClock` delegates to `anyio.current_time` and `anyio.sleep`.
 - `SimClock` keeps an internal heap of `(deadline, sequence, anyio.Event)`

@@ -1,4 +1,4 @@
-# ADR 0006 — In-process v0 with a reserved transport-adapter slot
+# ADR 0006 — Ship in-process only at first, with a reserved transport-adapter slot
 
 Status: Accepted (2026-05-18)
 
@@ -16,16 +16,16 @@ unable to add cross-process support without breaking changes to user code —
 because `Queue.put` has a different cost profile from "send over a network",
 or because the same-process API assumes Python object identity.
 
-We want neither failure mode. The plan is to ship in-process only in v0, but
-to shape the `Channel` API now so multi-process and network transports can
-land in v0.x without renaming or re-typing.
+We want neither failure mode. The plan is to ship in-process only at first,
+but to shape the `Channel` API now so multi-process and network transports
+can land in a later release without renaming or re-typing.
 
 ## Decision
 
 `SendStream` and `ReceiveStream` are Protocols. The in-process
 implementation (`_Send`, `_Recv`) wraps `anyio.MemoryObjectStream`s and is
-the only one v0 ships. `open_channel()` is the factory; it returns the
-in-process implementation.
+the only one shipped initially. `open_channel()` is the factory; it
+returns the in-process implementation.
 
 The Protocol surface is deliberately drawn at:
 - `async send(item) -> None`
@@ -39,13 +39,13 @@ identity (no "peek by reference," no "in-place mutation of buffered items"),
 any operation that requires synchronous semantics, and any operation that
 returns a non-typed item.
 
-When a v0.x adds e.g. a `ZenohChannel`, the user-facing call site stays
-`Channel.send.send(item)`; only the factory changes.
+When a later release adds e.g. a `ZenohChannel`, the user-facing call site
+stays `Channel.send.send(item)`; only the factory changes.
 
 ## Consequences
 
-+ v0 ships small (zero serialization concerns) and fast (in-process
-  buffer, no network).
++ The initial release ships small (zero serialization concerns) and fast
+  (in-process buffer, no network).
 + The user-facing API is stable across transport choices. Daemon code is
   transport-agnostic.
 + `ChannelStats` already includes counts that make sense for any transport
@@ -65,6 +65,6 @@ When a v0.x adds e.g. a `ZenohChannel`, the user-facing call site stays
 - ADR 0001 — `Channel` being the sole comm primitive means this one
   decision covers all communication patterns; we don't need parallel
   protocols for service-style or topic-style transports.
-- ADR 0007 — refusing extra runtime deps in v0 means the in-process
+- ADR 0007 — refusing extra runtime deps means the in-process
   implementation has no serialization cost to pay; that bill comes due
   when a network transport lands.

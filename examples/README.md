@@ -31,7 +31,8 @@ What we wanted to check by building this:
   realistic multi-rate pattern, or does the boilerplate get out of hand?
 - Does the "always use `ctx.clock`" rule (ADR 0002) pay for itself when
   several daemons sleep at different rates?
-- Where, if anywhere, do you wish for primitives that v0 doesn't ship?
+- Where, if anywhere, do you wish for primitives the current release
+  doesn't ship?
 
 ### Determinism caveat (found while building this)
 
@@ -85,29 +86,27 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   argument for *not* adding a decimation primitive — three different
   daemons would each want their own definition.
 
-### Where v0 was missed
+### Gaps surfaced (and what we did with them)
 
-- **`Supervisor.stop()` would have saved a sentinel exception.** The
-  `driver` daemon currently advances the SimClock by `duration_s` and then
-  raises `_PipelineDone` to bring the supervisor down. The caller has to
-  match-and-swallow it with `except* _PipelineDone`. With a planned
-  `Supervisor.stop()` (roadmap), the driver could call `sup.stop()` and
-  exit normally — no sentinel, no `BaseExceptionGroup` handling at the
-  call site.
-- **`ctx.logger.exception` fires for the expected `_PipelineDone`.** The
-  supervisor's `_host` logs every exception before deciding the policy.
-  This is correct for real failures, noisy for expected sentinel sentinels.
-  An `on_error="quiet"` policy or a "raise this without logging" channel
-  is a v0.x consideration; for now the noise is one stderr block per run.
-- **Sim-time isn't on log timestamps yet.** When running the example with
-  logging on, `%(asctime)s` is wall-clock — meaning every line shows
-  microsecond-range timestamps within the same second. Coming in v0.1
-  (ADR 0008): a `ClockAwareLoggerAdapter` that injects `ctx.clock.now()`
-  onto records so log lines actually reflect the simulated instant.
-- **A `Latest[T]` recipe.** This pattern (drain channel into a cache,
-  let consumers read the most recent) is reusable; promoting it to
-  `runlet.recipes.latest` would have replaced the inline class. Queued
-  on the roadmap.
+- **No external way to bring the supervisor down without a sentinel.**
+  The first draft had a `_PipelineDone` exception raised by a `driver`
+  daemon, swallowed at the call site with `except* _PipelineDone`. That
+  pattern was both noisy and wrong — every long-running deployment would
+  reinvent it. Promoted to `Supervisor.signal_stop()` / `await stop()`
+  (ADR 0009). The example's main task now does
+  `await clock.advance(N); await sup.stop(grace=0)`; no sentinel.
+- **Sim-time wasn't on log timestamps.** With wall-clock `%(asctime)s`,
+  every log line under SimClock looked like it fired at the same
+  microsecond. Promoted to `ClockAwareLoggerAdapter`, with
+  `record.sim_time` available to any format string (ADR 0008).
+- **Exception path lost daemon identity.** A daemon failing under
+  `on_error="shutdown"` produced a plain `RuntimeError` inside the
+  `ExceptionGroup` — no name attached. Promoted to `DaemonError`
+  wrapping the daemon name as the leaf (ADR 0008).
+- **A `Latest[T]` recipe.** The "drain channel into a cache, let
+  consumers read the most recent" pattern is reusable; the example
+  still inlines a 12-line implementation. Promoting it to
+  `runlet.recipes.latest` is queued on the roadmap.
 
 ### Honest verdict
 

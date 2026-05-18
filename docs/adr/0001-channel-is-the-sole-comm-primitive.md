@@ -63,7 +63,7 @@ load-bearing API.
 ## Related
 
 - ADR 0006 (transport adapter slot): `Channel` is a Protocol so multi-process
-  and network backends can be added in v0.x without reopening this decision.
+  and network backends can be added later without reopening this decision.
 - `runlet.recipes.fanout.tee`: the canonical 1:N broadcast helper.
 - `runlet.recipes.batcher`: shows how request/response is built from
   channels alone (no service primitive needed).

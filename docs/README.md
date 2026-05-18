@@ -17,7 +17,7 @@ editing-rule sheet for AI agents. Everything that explains *why* lives here.
   sync↔async bridging). The source lives in `src/runlet/recipes/`;
   recipes are importable but carry weaker stability guarantees than the
   core surface.
-- `roadmap.md` — what's planned for v0.x and what's deliberately deferred.
+- `roadmap.md` — what's planned next and what's deliberately deferred.
 
 ## When to add what
 
@@ -25,7 +25,7 @@ editing-rule sheet for AI agents. Everything that explains *why* lives here.
   involved) a new ADR.
 - A "let's not do X" decision → ADR.
 - "How do I X" question that recurs → recipe.
-- A planned v0.x feature → roadmap entry.
+- A planned future feature → roadmap entry.
 
 ## When *not* to write docs here
 

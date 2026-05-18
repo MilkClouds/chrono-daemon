@@ -77,7 +77,7 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 - [`docs/recipes.md`](docs/recipes.md) — patterns kept off the core
   surface but importable under `runlet.recipes.*`: fanout, batcher,
   select, sync↔async bridge. Source in `src/runlet/recipes/`.
-- [`docs/roadmap.md`](docs/roadmap.md) — what's planned for v0.x and what's
+- [`docs/roadmap.md`](docs/roadmap.md) — what's planned next and what's
   deliberately deferred.
 - [`examples/reflex_dual_mock.py`](examples/reflex_dual_mock.py) — full
   multi-rate System 2/1/0 mock pipeline, with an ergonomics post-mortem in
@@ -85,6 +85,6 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 
 ## Status
 
-v0. In-process only. The `Channel` protocol is shaped so multi-process and
-network transports can land in v0.x without breaking changes
+Early. In-process only. The `Channel` protocol is shaped so multi-process
+and network transports can be added later without breaking changes
 (see ADR 0006).

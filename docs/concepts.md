@@ -97,8 +97,8 @@ bug, not a tuning knob:
 
 - Topic / pub-sub broadcast → `runlet.recipes.fanout.tee` (see docs/recipes.md).
 - Services, RPC, parameter system, discovery.
-- Multi-process or network transport in v0 (the API is shaped so they can
-  land in v0.x without breaking changes — ADR 0006).
+- Multi-process or network transport in the current release (the API is
+  shaped so they can be added later without breaking changes — ADR 0006).
 - Lifecycle states beyond `on_start`/`run`/`on_stop`.
 - Dependency on anything other than `anyio` (ADR 0007).
 
