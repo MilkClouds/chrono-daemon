@@ -219,6 +219,92 @@ async def test_signal_stop_before_supervisor_entered_is_noop() -> None:
     sup.signal_stop()  # should not raise; no event yet, just a no-op
 
 
+async def test_on_stop_runs_on_shutdown_path() -> None:
+    """A daemon raising under on_error='shutdown' still gets on_stop after on_start succeeded."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _FailsAfterStart(Daemon):
+        async def on_start(self, ctx: Context) -> None:
+            log.append("on_start")
+
+        async def run(self, ctx: Context) -> None:
+            log.append("run")
+            raise RuntimeError("oops")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")
+
+    with pytest.raises(BaseExceptionGroup):
+        async with Supervisor(clock=clock) as sup:
+            sup.add(_FailsAfterStart(), name="fail")
+
+    assert log == ["on_start", "run", "on_stop"]
+
+
+async def test_on_stop_runs_on_ignore_path() -> None:
+    """A daemon raising under on_error='ignore' still gets on_stop after on_start succeeded."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _FailsAfterStart(Daemon):
+        async def on_start(self, ctx: Context) -> None:
+            log.append("on_start")
+
+        async def run(self, ctx: Context) -> None:
+            raise RuntimeError("oops")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")
+
+    async with Supervisor(clock=clock, on_error="ignore") as sup:
+        sup.add(_FailsAfterStart())
+
+    assert log == ["on_start", "on_stop"]
+
+
+async def test_on_stop_skipped_when_on_start_fails() -> None:
+    """If on_start itself raises, on_stop is not called (nothing to clean up)."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _StartFails(Daemon):
+        async def on_start(self, ctx: Context) -> None:
+            log.append("on_start-pre")
+            raise RuntimeError("init failed")
+
+        async def run(self, ctx: Context) -> None:
+            log.append("run")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")  # must not be reached
+
+    async with Supervisor(clock=clock, on_error="ignore") as sup:
+        sup.add(_StartFails())
+
+    assert log == ["on_start-pre"]
+
+
+async def test_add_rejects_daemon_factory_with_clear_error() -> None:
+    """Passing the @daemon factory directly (forgetting to call it) raises TypeError, not AttributeError."""
+    from runlet import daemon as daemon_decorator
+
+    @daemon_decorator
+    async def my_worker(ctx: Context) -> None:
+        pass
+
+    sup = Supervisor()
+    with pytest.raises(TypeError, match="@daemon factory"):
+        sup.add(my_worker)  # type: ignore[arg-type]
+
+
+async def test_add_rejects_non_daemon_with_clear_error() -> None:
+    """Passing a random object raises TypeError mentioning the wrong type."""
+    sup = Supervisor()
+    with pytest.raises(TypeError, match="expected a Daemon"):
+        sup.add("not a daemon")  # type: ignore[arg-type]
+
+
 async def test_each_daemon_gets_its_own_cancel_scope() -> None:
     """Per-daemon scope: concurrent daemons under one Supervisor must see distinct ``cancel_scope`` objects.
 

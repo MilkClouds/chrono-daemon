@@ -144,7 +144,19 @@ class Supervisor:
         registered daemon — duplicate names share a child logger and make
         cross-task error attribution harder. Pass a unique ``name=...`` to
         silence intentionally.
+
+        Raises :class:`TypeError` if ``daemon`` is not a :class:`Daemon`
+        instance. A common mistake is to pass the ``@daemon`` factory itself
+        rather than calling it; the error message points that out explicitly.
         """
+        if not isinstance(daemon, Daemon):
+            if callable(daemon) and getattr(daemon, "_runlet_daemon_factory", False):
+                fn_name = getattr(daemon, "__name__", "<factory>")
+                raise TypeError(
+                    f"add() got a @daemon factory ({fn_name!r}), not a Daemon instance. "
+                    f"Call it first to construct one: sup.add({fn_name}(...))"
+                )
+            raise TypeError(f"add() expected a Daemon instance, got {type(daemon).__name__}")
         chosen = name or daemon.name or type(daemon).__name__
         if chosen in self._seen_names:
             warnings.warn(
@@ -227,7 +239,15 @@ class Supervisor:
             self._all_done.set()
 
     async def _host(self, daemon: Daemon, name: str) -> None:
-        """Lifecycle wrapper running inside the task group for one daemon."""
+        """Lifecycle wrapper running inside the task group for one daemon.
+
+        Lifecycle guarantee: if ``on_start(ctx)`` returned successfully, ``on_stop(ctx)``
+        is invoked exactly once before the host returns or re-raises — on the normal
+        path, the Exception paths (shutdown/restart/ignore), and the forceful cancel
+        path. The cancel/shutdown/ignore paths run ``on_stop`` inside a shielded
+        scope bounded by ``self._finalize_timeout``; the restart path runs it inline
+        between attempts so each iteration sees ``on_start`` paired with ``on_stop``.
+        """
         delay = self._restart.base
         retries = 0
         cancelled_cls = anyio.get_cancelled_exc_class()
@@ -245,21 +265,20 @@ class Supervisor:
                     supervisor=self,
                     stop_event=self._stop_event,
                 )
+                on_start_done = False
                 try:
                     with scope:
                         await daemon.on_start(ctx)
+                        on_start_done = True
                         await daemon.run(ctx)
                         await daemon.on_stop(ctx)
                     return
                 except BaseException as exc:
+                    # If on_start succeeded, on_stop is owed regardless of how we exit.
+                    # Run it under a shield so cancellation cannot cut cleanup short.
+                    if on_start_done:
+                        await self._run_on_stop_shielded(daemon, ctx)
                     if isinstance(exc, cancelled_cls):
-                        # Forceful cancel path — try on_stop with shield + timeout.
-                        with anyio.CancelScope(shield=True):
-                            with anyio.move_on_after(self._finalize_timeout):
-                                try:
-                                    await daemon.on_stop(ctx)
-                                except Exception:
-                                    ctx.logger.exception("on_stop raised under cancel")
                         raise
                     if not isinstance(exc, Exception):
                         raise
@@ -279,3 +298,18 @@ class Supervisor:
                     delay = min(delay * self._restart.factor, self._restart.cap)
         finally:
             self._on_daemon_exit()
+
+    async def _run_on_stop_shielded(self, daemon: Daemon, ctx: Context) -> None:
+        """Run ``daemon.on_stop`` under a shielded scope with a finite time budget.
+
+        Used on all non-normal exit paths (cancel + shutdown + restart + ignore) so
+        ``on_stop`` is reached even when the surrounding code is being torn down.
+        Exceptions raised by ``on_stop`` are logged and swallowed — the outer path's
+        decision (re-raise, restart, etc.) takes precedence.
+        """
+        with anyio.CancelScope(shield=True):
+            with anyio.move_on_after(self._finalize_timeout):
+                try:
+                    await daemon.on_stop(ctx)
+                except Exception:
+                    ctx.logger.exception("on_stop raised during teardown")

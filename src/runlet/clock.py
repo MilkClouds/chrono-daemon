@@ -116,8 +116,19 @@ class SimClock:
         if seconds <= 0:
             return
         ev = anyio.Event()
-        heapq.heappush(self._waiters, (self._t + seconds, next(self._seq), ev))
-        await ev.wait()
+        entry = (self._t + seconds, next(self._seq), ev)
+        heapq.heappush(self._waiters, entry)
+        try:
+            await ev.wait()
+        finally:
+            # If the event was never set (cancellation), drop the entry so the
+            # heap doesn't grow unboundedly under repeated cancel-and-restart.
+            if not ev.is_set():
+                try:
+                    self._waiters.remove(entry)
+                    heapq.heapify(self._waiters)
+                except ValueError:
+                    pass  # already popped by advance_to between set() and wait wake-up
 
     async def advance(self, dt: float) -> None:
         """Advance virtual time by ``dt`` seconds."""
@@ -164,4 +175,11 @@ class SimClock:
             if delta > 0:
                 await self.sleep(delta)
             yield next_t
+            # Maintain a monotonic-target schedule (the Clock protocol contract):
+            # if virtual time has already passed beyond the next target — e.g.
+            # because a single advance(dt) overshoots multiple periods — skip the
+            # missed ticks rather than firing them all in a catch-up burst.
             next_t += period
+            now = self._t
+            while next_t <= now:
+                next_t += period

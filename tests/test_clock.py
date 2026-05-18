@@ -136,3 +136,57 @@ async def test_simclock_sleep_zero_is_a_checkpoint() -> None:
     clock = SimClock(t0=42.0)
     await clock.sleep(0)
     assert clock.now() == 42.0
+
+
+async def test_simclock_every_skips_missed_ticks_like_wallclock() -> None:
+    """SimClock.every honors the protocol's monotonic-target contract:
+
+    one ``advance(dt)`` that overshoots several periods yields *one* tick at the
+    boundary, not a catch-up burst of every missed period.
+    """
+    clock = SimClock()
+    seen: list[float] = []
+
+    async def ticker() -> None:
+        async for t in clock.every(0.1):
+            seen.append(t)
+            # Bail after the first tick so we can inspect what fired.
+            if len(seen) >= 1:
+                return
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        await anyio.sleep(0)
+        # Overshoot by 5 periods. A catch-up implementation would yield 5 times;
+        # a monotonic-target one yields once and then the loop ends.
+        await clock.advance(0.5)
+
+    assert seen == [0.1]
+
+
+async def test_simclock_sleep_removes_entry_on_cancellation() -> None:
+    """Cancelled sleepers must not accumulate in the heap.
+
+    Without cleanup, repeated cancel-and-retry under SimClock would grow
+    ``_waiters`` without bound.
+    """
+    import anyio.lowlevel
+
+    clock = SimClock()
+    started = anyio.Event()
+
+    async def sleeper() -> None:
+        started.set()
+        await clock.sleep(100.0)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper)
+        await started.wait()
+        # Let the sleeper reach its await on the internal anyio.Event so the
+        # heap entry is registered.
+        for _ in range(5):
+            await anyio.lowlevel.checkpoint()
+        assert len(clock._waiters) == 1
+        tg.cancel_scope.cancel()
+
+    assert len(clock._waiters) == 0, "cancelled sleepers must leave the heap"

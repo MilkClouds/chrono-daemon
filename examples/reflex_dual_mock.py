@@ -15,13 +15,15 @@ The ``driver`` daemon advances the SimClock by ``duration_s`` and then calls
 ``cooperative_every`` so the stop signal terminates the pipeline naturally,
 with every ``on_stop`` running on the standard return path.
 
-Pipeline layout (rates are virtual under ``SimClock``):
+Pipeline layout (rates are virtual under ``SimClock``; numbers below mirror
+the rates in the production design doc at
+``projects/reflex-train/docs/inference-refactor.md``):
 
-    sensor (10 Hz) ─▶ obs_cache  (Latest[Obs])
+    sensor (20 Hz) ─▶ obs_cache  (Latest[Obs])
                             │
               ┌─────────────┴──────────────┐
               ▼                            ▼
-        s2_planner (2 Hz)              s1_policy (10 Hz)
+        s2_planner (1 Hz)              s1_policy (10 Hz)
         reads obs_cache,                reads obs_cache + subgoal_cache,
         produces Subgoal                produces Chunk (8 actions)
                   │                              │
@@ -31,7 +33,7 @@ Pipeline layout (rates are virtual under ``SimClock``):
                                                  ▼
                                          s0_dispenser
                                          pops chunk, emits one Action
-                                         every 1/S0_HZ
+                                         every 1/S0_HZ (20 Hz)
                                                  │
                                                  ▼
                                          action_channel
@@ -104,10 +106,17 @@ class Latest(Generic[T]):
 
 # --- rates and mock latencies ---------------------------------------------
 
-SENSOR_HZ = 10.0
-S2_HZ = 2.0
+# Rates mirror the production design doc
+# (projects/reflex-train/docs/inference-refactor.md):
+#   - S2 fires at 1 Hz (period_ms: 1000)
+#   - S1 fires at 10 Hz (period_ms: 100)
+#   - S0 dispenses at the robot control rate (~20 Hz in the autonomous-mode example)
+#   - Sensor pushes at the sim-eval obs rate (20 Hz, matching S1's
+#     obs_sampling_rate_hz so training-distribution rates line up)
+SENSOR_HZ = 20.0
+S2_HZ = 1.0
 S1_HZ = 10.0
-S0_HZ = 100.0
+S0_HZ = 20.0
 CHUNK_SIZE = 8
 
 S2_LATENCY = 0.05  # virtual seconds spent inside the mocked S2 inference
