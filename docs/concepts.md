@@ -95,13 +95,13 @@ bug, not a tuning knob:
 
 ## What is intentionally not here
 
-- Topic / pub-sub broadcast → recipes/fanout.py.
+- Topic / pub-sub broadcast → `runlet.recipes.fanout.tee` (see docs/recipes.md).
 - Services, RPC, parameter system, discovery.
 - Multi-process or network transport in v0 (the API is shaped so they can
   land in v0.x without breaking changes — ADR 0006).
 - Lifecycle states beyond `on_start`/`run`/`on_stop`.
 - Dependency on anything other than `anyio` (ADR 0007).
 
-If you find yourself wanting one of these, check `recipes/` and the
-`roadmap.md` first; the relevant ADR explains the reasoning if you want to
-push back on the decision.
+If you find yourself wanting one of these, check `docs/recipes.md` (and
+its source in `src/runlet/recipes/`) and `roadmap.md` first; the relevant
+ADR explains the reasoning if you want to push back on the decision.

@@ -40,7 +40,7 @@ known-first-party = ["runlet"]
 testpaths = ["tests"]
 
 [tool.pyrefly]
-project-includes = ["src/", "tests/", "examples/", "docs/recipes/"]
+project-includes = ["src/", "tests/", "examples/"]
 search-path = ["src"]
 python-version = "3.11"
 permissive-ignores = true

@@ -1,7 +1,7 @@
 # examples — end-to-end demos and ergonomic stress-tests
 
 This folder holds full, runnable demos of runlet on realistic patterns —
-larger than `docs/recipes/` snippets, smaller than a production system. They
+larger than `runlet.recipes` helpers, smaller than a production system. They
 double as **ergonomic stress-tests**: building each one is a check that the
 core primitives compose cleanly on a real workload.
 
@@ -105,8 +105,9 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   (ADR 0008): a `ClockAwareLoggerAdapter` that injects `ctx.clock.now()`
   onto records so log lines actually reflect the simulated instant.
 - **A `Latest[T]` recipe.** This pattern (drain channel into a cache,
-  let consumers read the most recent) is reusable; a `tee_to_latest`
-  helper in `docs/recipes/` would have replaced the inline class.
+  let consumers read the most recent) is reusable; promoting it to
+  `runlet.recipes.latest` would have replaced the inline class. Queued
+  on the roadmap.
 
 ### Honest verdict
 

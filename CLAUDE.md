@@ -23,9 +23,10 @@ ADR first.
 
 - **`anyio` is the only direct runtime dependency.** No `msgspec`, no
   `structlog`, no `pydantic`. (ADR 0007.)
-- **`Channel` is the sole communication primitive.** Don't add `Topic`,
-  pub/sub broadcast, services, RPC, or a parameter system. Fanout belongs
-  in `docs/recipes/fanout.py`. (ADR 0001.)
+- **`Channel` is the sole communication primitive on the core surface.**
+  Don't add `Topic`, pub/sub broadcast, services, RPC, or a parameter
+  system to `runlet.*`. Fanout lives at `runlet.recipes.fanout.tee` —
+  importable, but under the weaker-stability recipes namespace. (ADR 0001.)
 - **Daemons must reach for `ctx.clock.sleep(...)`** — never `anyio.sleep`
   directly. Library-internal code must obey this so `SimClock` can
   intercept. (ADR 0002.)
@@ -52,9 +53,10 @@ ADR first.
 - `docs/concepts.md` — user-facing explanation of the four primitives.
 - `docs/adr/` — frozen-in-time decision records. Immutable once accepted;
   add a new ADR to revise.
-- `docs/recipes/` — patterns the core deliberately doesn't ship (fanout,
-  batcher, select, sync_bridge). Users copy these; we don't expose them as
-  imports.
+- `src/runlet/recipes/` — patterns kept off the core surface but
+  importable under `runlet.recipes.*`. Weaker stability guarantees than
+  the core (see `src/runlet/recipes/__init__.py`).
+- `docs/recipes.md` — user-facing index for the above.
 - `docs/roadmap.md` — v0.x candidates and explicit no-goals.
 - `examples/` — end-to-end demos exercised by CI (`tests/test_examples.py`).
 - `CLAUDE.md` (this file) — editing rules + commands only.

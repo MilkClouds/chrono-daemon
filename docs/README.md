@@ -12,9 +12,11 @@ editing-rule sheet for AI agents. Everything that explains *why* lives here.
   statement of a load-bearing decision: the context, the choice, and what
   becomes true and not-true as a result. New ADRs are added rather than
   editing old ones; superseded ADRs link forward.
-- `recipes/` — short, runnable Python files demonstrating patterns the core
-  library deliberately does *not* ship (broadcast/fanout, batching,
-  multi-channel select, sync↔async bridging). Copy-paste over import.
+- `recipes.md` — the user-facing index for patterns shipped under
+  `runlet.recipes` (broadcast/fanout, batching, multi-channel select,
+  sync↔async bridging). The source lives in `src/runlet/recipes/`;
+  recipes are importable but carry weaker stability guarantees than the
+  core surface.
 - `roadmap.md` — what's planned for v0.x and what's deliberately deferred.
 
 ## When to add what

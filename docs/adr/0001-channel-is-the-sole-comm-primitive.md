@@ -33,8 +33,12 @@ one** waiting receiver (competing-consumers semantics). Closing the send side
 propagates `EndOfStream` to all receivers after the buffer drains.
 
 There is no `Topic`, no broadcast primitive, no service/RPC primitive, no
-parameter system, no discovery. Users that need 1:N broadcast copy
-`docs/recipes/fanout.py` (`tee(src, *dests)`) into their codebase.
+parameter system, no discovery on the core surface. Users that need 1:N
+broadcast import `runlet.recipes.fanout.tee` — recipes live under a
+sibling namespace (`runlet.recipes`) with weaker stability guarantees
+than the core (see `docs/recipes.md`), so they're available without
+copy-paste but are signaled as best-effort rather than part of the
+load-bearing API.
 
 ## Consequences
 
@@ -45,9 +49,10 @@ parameter system, no discovery. Users that need 1:N broadcast copy
   ordering ambiguity to specify.
 + Wiring is visible in code (every channel is a named local variable), so a
   reader can statically trace dataflow.
-- 1:N broadcast costs the user a 5-line `tee` daemon. For workloads with
-  pervasive broadcast (e.g. a single `on_tick` driving multiple
-  inference loops), the boilerplate adds up.
+- 1:N broadcast costs the user a one-line `from runlet.recipes.fanout
+  import tee` plus the wiring. For workloads with pervasive broadcast
+  (e.g. a single `on_tick` driving multiple inference loops), the wiring
+  is still explicit, just import-able.
 - Migration from ROS code that relies on runtime subscriber discovery is
   not a mechanical port — every dynamic subscription has to become an
   explicit channel handed in at construction.
@@ -59,6 +64,6 @@ parameter system, no discovery. Users that need 1:N broadcast copy
 
 - ADR 0006 (transport adapter slot): `Channel` is a Protocol so multi-process
   and network backends can be added in v0.x without reopening this decision.
-- `docs/recipes/fanout.py`: the canonical 1:N broadcast workaround.
-- `docs/recipes/batcher.py`: shows how request/response is built from
+- `runlet.recipes.fanout.tee`: the canonical 1:N broadcast helper.
+- `runlet.recipes.batcher`: shows how request/response is built from
   channels alone (no service primitive needed).

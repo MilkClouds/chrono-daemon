@@ -48,8 +48,8 @@ and free of the global "what state am I in" question.
   deterministic-replay properties.
 + No lifecycle service to discover, version, or secure.
 - Users coming from ROS2 looking for "lifecycle node" will not find it.
-  The migration is "pass a command channel" — visible in the
-  `docs/recipes/` folder if a clear pattern emerges.
+  The migration is "pass a command channel" — promoted to
+  `runlet.recipes.*` if a clear pattern emerges.
 - Domain-specific pause/resume protocols won't share a common signature
   across daemons. This is intentional — they shouldn't, because what
   "pause" means is daemon-specific.

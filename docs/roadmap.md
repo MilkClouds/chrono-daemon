@@ -16,7 +16,7 @@ ship.
 - **`Latest[T]` recipe.** The "drain a channel into a cache, let
   consumers read the most recent value" pattern recurs in any multi-rate
   reactive system. The current `examples/reflex_dual_mock.py` inlines a
-  12-line implementation; promoting it to `docs/recipes/latest.py` is the
+  12-line implementation; promoting it to `runlet.recipes.latest` is the
   next step.
 - **Multi-process and network transports.** `Channel` is already a Protocol
   (ADR 0006), so a `MultiprocessChannel` and a `ZenohChannel` can land
@@ -56,7 +56,7 @@ ship.
 These are recorded in ADRs; the corresponding ADR is the canonical
 explanation. Listing them here so contributors don't accidentally re-litigate.
 
-- **`Topic` / pub-sub broadcast.** ADR 0001. Use `recipes/fanout.py`.
+- **`Topic` / pub-sub broadcast.** ADR 0001. Use `runlet.recipes.fanout.tee`.
 - **Lifecycle states beyond `on_start`/`run`/`on_stop`.** ADR 0005.
 - **Services, RPC, parameter system, discovery.** No ADR yet because no one
   has asked; if it comes up, ADR it.

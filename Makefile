@@ -1,7 +1,7 @@
 .PHONY: check test lint format install all
 
 # Source paths that participate in lint/format/type-check.
-SRC_PATHS = src/ tests/ examples/ docs/recipes/
+SRC_PATHS = src/ tests/ examples/
 
 check: lint
 	uv run pyrefly check

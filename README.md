@@ -74,8 +74,9 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
   invariants the test suite pins.
 - [`docs/adr/`](docs/adr/) — why each decision looks the way it does
   (Topic-less, on-error-shutdown by default, anyio-only, …).
-- [`docs/recipes/`](docs/recipes/) — patterns deliberately kept out of the
-  core: fanout, batcher, select, sync↔async bridge. Copy-paste over import.
+- [`docs/recipes.md`](docs/recipes.md) — patterns kept off the core
+  surface but importable under `runlet.recipes.*`: fanout, batcher,
+  select, sync↔async bridge. Source in `src/runlet/recipes/`.
 - [`docs/roadmap.md`](docs/roadmap.md) — what's planned for v0.x and what's
   deliberately deferred.
 - [`examples/reflex_dual_mock.py`](examples/reflex_dual_mock.py) — full
