@@ -1,79 +1,104 @@
-"""Recipe: call into a long-lived runlet supervisor from synchronous code.
+"""Recipe: host an async runlet supervisor behind a synchronous API.
 
-Many deployments have a synchronous outer ABC (a model-server callback, a
-ROS subscriber, a CLI request handler) but want the inside to be a runlet
-supervisor that survives across calls. anyio ships ``BlockingPortal`` for
-exactly this pattern; this recipe shows the shape.
+Many deployments hand you a synchronous outer boundary (a model-server
+callback, a ROS subscriber, a CLI handler) but want the inside to be a
+long-lived runlet supervisor. anyio ships ``BlockingPortal`` for exactly
+this; ``host_async_dispatcher`` wraps that into the shape every "async
+dispatcher behind a sync ABC" deployment ends up at (e.g. worv-ai/reflex
+PR #191's ``ReFlExDualDispatcherServer``).
 
-The idea: spin up the supervisor inside ``portal.wrap_async_context_manager``
-on a dedicated event-loop thread, then ``portal.call(async_fn, *args)``
-from sync code to push work in or pull results out. The portal handles
-threading; runlet stays oblivious.
+Usage::
 
-Copy this file into your codebase as needed. It is not exported from
-``runlet``.
+    async def setup(sup: Supervisor) -> MyDispatcher:
+        sup.add(MyWorker(...))
+        return MyDispatcher(...)
+
+    with host_async_dispatcher(setup) as (portal, dispatcher):
+        portal.call(dispatcher.push, item)
+
+The supervisor uses :class:`runlet.WallClock` by default; pass ``clock=``
+to override.
+
+Import as ``from runlet.recipes.sync_bridge import host_async_dispatcher``.
+The recipe namespace (``runlet.recipes``) is best-effort.
 """
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable, Coroutine, Generator
 from contextlib import contextmanager
-from typing import Generic, TypeVar
+from typing import Any, TypeVar
 
-import anyio
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 
-from runlet import Channel, Supervisor, WallClock, open_channel
+from runlet import Clock, Supervisor, WallClock
 
-T = TypeVar("T")
+__all__ = ["host_async_dispatcher"]
 
-
-class SyncSupervisorHandle(Generic[T]):
-    """Sync-callable handle around an async supervisor + a request channel.
-
-    Construct via ``open_sync_supervisor(...)`` (the context manager below).
-    The supervisor runs on a private event-loop thread. ``submit(req)`` is
-    a regular blocking call; under the hood it forwards through the portal
-    onto the supervisor's loop.
-    """
-
-    def __init__(self, portal: BlockingPortal, req_send) -> None:
-        self._portal = portal
-        self._req_send = req_send
-
-    def submit(self, req: T) -> None:
-        """Synchronously enqueue a request to the supervisor."""
-        self._portal.call(self._req_send.send, req)
+D = TypeVar("D")
 
 
 @contextmanager
-def open_sync_supervisor():
-    """Context manager spinning up a supervisor on a dedicated thread.
+def host_async_dispatcher(
+    setup: Callable[[Supervisor], Coroutine[Any, Any, D]],
+    *,
+    clock: Clock | None = None,
+    backend: str = "asyncio",
+    ready_timeout: float = 10.0,
+) -> Generator[tuple[BlockingPortal, D], None, None]:
+    """Spin up a supervisor on a private event loop; yield ``(portal, dispatcher)``.
 
-    Yields a ``SyncSupervisorHandle`` that sync code can call. The supervisor
-    is torn down when the context exits.
+    ``setup(supervisor)`` is awaited once on the background loop. Whatever it
+    returns is the dispatcher object handed to sync callers; they invoke its
+    async methods via ``portal.call(dispatcher.method, ...)``.
 
-    Implementation note: this skeleton stands up the portal and the request
-    channel but does not add any daemons by default. Replace the body of
-    ``_serve`` to add your own daemons (e.g. a worker reading from
-    ``req_recv`` and producing actions).
+    The supervisor is torn down (``stop(grace=0)``) when the ``with`` block
+    exits; the portal is then shut down.
+
+    Raises :class:`RuntimeError` if ``setup`` does not return within
+    ``ready_timeout`` wall-clock seconds.
     """
-    request_channel: Channel = open_channel(maxsize=16)
+    box: list[D | None] = [None]
+    error: list[BaseException | None] = [None]
+    ready = threading.Event()
+    sup_box: list[Supervisor | None] = [None]
 
     async def _serve() -> None:
-        async with Supervisor(clock=WallClock()) as sup:
-            # Replace this stub with your own daemons. Hand sup the
-            # request_channel.recv side so workers can consume submissions.
-            _ = sup  # keep the supervisor alive until cancelled
-            await anyio.sleep_forever()
-
-    with start_blocking_portal() as portal:
-        # Start the supervisor task on the portal's loop.
-        portal.start_task_soon(_serve)
-        handle = SyncSupervisorHandle(portal, request_channel.send)
+        sup = Supervisor(clock=clock or WallClock())
+        sup_box[0] = sup
         try:
-            yield handle
+            async with sup:
+                try:
+                    box[0] = await setup(sup)
+                except BaseException as exc:
+                    error[0] = exc
+                    raise
+                finally:
+                    ready.set()
+                await sup._stop_event.wait()  # type: ignore[union-attr]
+                await sup.stop(grace=0.0)
+        except BaseException as exc:
+            if error[0] is None:
+                error[0] = exc
+
+    with start_blocking_portal(backend=backend) as portal:
+        portal.start_task_soon(_serve)
+        if not ready.wait(timeout=ready_timeout):
+            raise RuntimeError(
+                f"async setup did not complete within {ready_timeout}s; "
+                "check that setup(supervisor) is async and returns promptly"
+            )
+        if error[0] is not None:
+            raise RuntimeError("async setup failed") from error[0]
+        dispatcher = box[0]
+        assert dispatcher is not None
+        try:
+            yield portal, dispatcher
         finally:
-            # Cancel the supervisor by closing the request channel; the
-            # portal context manager will then drain the remaining work and
-            # tear down its loop.
-            portal.call(request_channel.send.aclose)
+            sup = sup_box[0]
+            if sup is not None:
+                try:
+                    sup.signal_stop()
+                except Exception:
+                    pass

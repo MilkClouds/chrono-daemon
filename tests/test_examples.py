@@ -50,3 +50,24 @@ async def test_reflex_dual_mock_scales_with_sim_time() -> None:
     short = await run_mock(duration_s=1.0)
     long = await run_mock(duration_s=2.0)
     assert len(long) > len(short)
+
+
+# -- multi-session example ------------------------------------------------
+
+
+from reflex_dual_multi_session import run_multi_session  # noqa: E402
+
+
+async def test_multi_session_isolation() -> None:
+    """Each session runs to its own duration in its own inner Supervisor.
+
+    Sessions with different ``duration_s`` produce different action counts
+    proportional to their duration — proving the per-session SimClocks are
+    actually independent. Durations need to exceed S2's 1 Hz period so the
+    first subgoal lands and S1/S0 can produce.
+    """
+    logs = await run_multi_session({"short": 2.0, "long": 3.0})
+    assert set(logs) == {"short", "long"}
+    for sid, log in logs.items():
+        assert log.actions, f"session {sid!r} produced no actions"
+    assert len(logs["long"].actions) > len(logs["short"].actions)

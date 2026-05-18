@@ -17,7 +17,7 @@ Use them by importing directly:
     from runlet.recipes.fanout import tee
     from runlet.recipes.select import select
     from runlet.recipes.batcher import batcher_loop, submit
-    from runlet.recipes.sync_bridge import open_sync_supervisor
+    from runlet.recipes.sync_bridge import host_async_dispatcher
 
 The corresponding design notes live in ``docs/recipes.md``.
 """
