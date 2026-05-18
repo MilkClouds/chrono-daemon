@@ -80,11 +80,10 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
 
 ### Where boilerplate showed up
 
-- **`Latest[T]` had to be hand-rolled.** The "shared latest value" pattern
-  is the obvious result of "Channel is 1:1, but I want N consumers to see
-  the most recent producer output without consuming a queue." It's 12
-  lines and obvious in this example — but if every project re-rolls it,
-  that's a recipe candidate. Calling this out in the roadmap.
+- **`Latest[T]` was hand-rolled at first.** The "shared latest value"
+  pattern is the obvious result of "Channel is 1:1, but I want N
+  consumers to see the most recent producer output without consuming a
+  queue." Promoted to `runlet.recipes.latest` after both examples needed it.
 - **Decimation (`if counter % decimate: continue`) is manual.** ROS-style
   systems with `obs_sampling_rate_hz` express this as a config field; we
   express it as a one-line if. The one-line if is fine, but it's an
@@ -108,10 +107,6 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   `on_error="shutdown"` produced a plain `RuntimeError` inside the
   `ExceptionGroup` — no name attached. Promoted to `DaemonError`
   wrapping the daemon name as the leaf (ADR 0008).
-- **A `Latest[T]` recipe.** The "drain channel into a cache, let
-  consumers read the most recent" pattern is reusable; the example
-  still inlines a 12-line implementation. Promoting it to
-  `runlet.recipes.latest` is queued on the roadmap.
 
 ### Honest verdict (single-session)
 

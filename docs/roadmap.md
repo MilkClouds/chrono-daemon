@@ -13,11 +13,6 @@ ship.
   ambiguity — small enough to be a recipe, common enough that promoting
   it into the core is on the table. (Surfaced by
   `examples/reflex_dual_mock.py`.)
-- **`Latest[T]` recipe.** The "drain a channel into a cache, let
-  consumers read the most recent value" pattern recurs in any multi-rate
-  reactive system. Both reflex-dual examples currently inline a 12-line
-  implementation; promoting it to `runlet.recipes.latest` is the next
-  step.
 - **Multi-process and network transports.** `Channel` is already a Protocol
   (ADR 0006), so a `MultiprocessChannel` and a `ZenohChannel` can land
   without breaking changes. The blocker is picking a serialization story

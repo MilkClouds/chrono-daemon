@@ -43,6 +43,11 @@ The stability contract is restated at the top of
   Stop-aware periodic iteration: like `ctx.clock.every(period)`, but exits
   when `ctx.stopping` becomes True. The reasonable default for a daemon
   loop that should honour `Supervisor.stop`.
+- **`runlet.recipes.latest.Latest`** —
+  [`latest.py`](../src/runlet/recipes/latest.py). One-slot cache for the
+  "most-recent value" pattern: producer calls `.set(value)`, N consumers
+  call `.get()`. The standard way to share a latest-snapshot across
+  daemons without a broadcast channel (ADR 0001).
 - **`runlet.recipes.sync_bridge.host_async_dispatcher`** —
   [`sync_bridge.py`](../src/runlet/recipes/sync_bridge.py). Host a
   long-lived runlet supervisor on a dedicated event loop; sync callers

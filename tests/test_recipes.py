@@ -21,7 +21,24 @@ pytestmark = pytest.mark.anyio
 
 async def test_recipes_namespace_imports() -> None:
     """All recipe modules import without error."""
-    from runlet.recipes import batcher, cooperative_every, fanout, sync_bridge  # noqa: F401
+    from runlet.recipes import (  # noqa: F401
+        batcher,
+        cooperative_every,
+        fanout,
+        latest,
+        sync_bridge,
+    )
+
+
+async def test_latest_stores_and_returns_most_recent_value() -> None:
+    from runlet.recipes.latest import Latest
+
+    cache: Latest[int] = Latest()
+    assert cache.get() is None
+    cache.set(1)
+    assert cache.get() == 1
+    cache.set(2)
+    assert cache.get() == 2
 
 
 async def test_fanout_tee_delivers_each_item_to_every_destination() -> None:

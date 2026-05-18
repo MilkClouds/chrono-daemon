@@ -48,12 +48,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Generic, TypeVar
 
 import anyio
 
 from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel
 from runlet.recipes.cooperative_every import cooperative_every
+from runlet.recipes.latest import Latest
 
 # --- data shapes ----------------------------------------------------------
 
@@ -83,27 +83,6 @@ class Action:
     cmd: float
     cog: int
     t_dispensed: float
-
-
-# --- one-slot cache for "latest value" state across tasks ------------------
-# Single-attribute reads/writes are atomic in Python; no lock needed for the
-# at-most-one-writer / many-reader pattern we use below.
-
-
-T = TypeVar("T")
-
-
-class Latest(Generic[T]):
-    __slots__ = ("_v",)
-
-    def __init__(self) -> None:
-        self._v: T | None = None
-
-    def get(self) -> T | None:
-        return self._v
-
-    def set(self, value: T) -> None:
-        self._v = value
 
 
 # --- rates and mock latencies ---------------------------------------------

@@ -36,7 +36,6 @@ from reflex_dual_mock import (  # noqa: E402
     OBS_RATE_HZ,
     Action,
     Chunk,
-    Latest,
     Obs,
     Subgoal,
     actuator,
@@ -46,6 +45,7 @@ from reflex_dual_mock import (  # noqa: E402
 )
 
 from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel  # noqa: E402
+from runlet.recipes.latest import Latest  # noqa: E402
 
 
 @dataclass
