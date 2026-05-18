@@ -76,7 +76,7 @@ def host_async_dispatcher(
                     raise
                 finally:
                     ready.set()
-                await sup._stop_event.wait()  # type: ignore[union-attr]
+                await sup.stop_event.wait()
                 await sup.stop(grace=0.0)
         except BaseException as exc:
             if error[0] is None:

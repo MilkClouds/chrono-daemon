@@ -110,6 +110,13 @@ class Supervisor:
     def logger(self) -> logging.Logger:
         return self._logger
 
+    @property
+    def stop_event(self) -> anyio.Event:
+        """The shared stop event. Valid only inside ``async with Supervisor(...)``."""
+        if self._stop_event is None:
+            raise RuntimeError("supervisor not entered; stop_event unavailable")
+        return self._stop_event
+
     # -- async context manager -------------------------------------------------
 
     async def __aenter__(self) -> Supervisor:
@@ -229,13 +236,11 @@ class Supervisor:
     # -- internals -------------------------------------------------------------
 
     def _on_daemon_exit(self) -> None:
+        # Only ever called from _host's finally, which only runs inside the task
+        # group entered by __aenter__ — so both events are guaranteed live here.
+        assert self._stop_event is not None and self._all_done is not None
         self._active_count -= 1
-        if (
-            self._active_count == 0
-            and self._stop_event is not None
-            and self._stop_event.is_set()
-            and self._all_done is not None
-        ):
+        if self._active_count == 0 and self._stop_event.is_set():
             self._all_done.set()
 
     async def _host(self, daemon: Daemon, name: str) -> None:

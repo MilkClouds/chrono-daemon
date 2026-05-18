@@ -146,7 +146,7 @@ async def _try_recv_nowait(
             return True
         except EndOfStream:
             return False
-    return False if scope.cancelled_caught else False
+    return False  # cancel scope timed out — no item was ready
 
 
 async def _recv_or_timeout(

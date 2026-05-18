@@ -23,10 +23,8 @@ import anyio.lowlevel
 
 __all__ = ["Clock", "SimClock", "WallClock"]
 
-# Number of `checkpoint()` yields to perform between each SimClock wake event,
-# giving the just-woken task time to register a follow-up sleep before we look
-# at the heap again. asyncio settles in 1 round; trio sometimes needs a few.
-# 8 is empirically generous; raise only if a test flakes under load.
+# Yields between wakes so a woken task can register a follow-up sleep before
+# the next heap check. asyncio settles in 1, trio sometimes needs a few.
 _SETTLE_ROUNDS = 8
 
 
@@ -109,9 +107,7 @@ class SimClock:
         return self._t
 
     async def sleep(self, seconds: float) -> None:
-        # Always go through a checkpoint first so callers in a freshly-cancelled
-        # scope get the CancelledError before they enqueue a deadline that would
-        # then have to be cleaned up.
+        # Checkpoint first so a freshly-cancelled caller exits before enqueueing.
         await anyio.lowlevel.checkpoint()
         if seconds <= 0:
             return
