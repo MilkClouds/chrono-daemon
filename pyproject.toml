@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runlet"
+version = "0.1.0"
+description = "Tiny anyio-based concurrency primitives: Channel, Clock (wall + sim), Daemon, Supervisor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "anyio>=4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-anyio",
+    "trio>=0.27",
+    "ruff",
+    "pyrefly>=0.57",
+]
+
+[tool.uv]
+# Bump + `uv lock --upgrade` to refresh uv.lock.
+exclude-newer = "2026-05-18T00:00:00+09:00"
+
+[tool.ruff]
+line-length = 119
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["runlet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyrefly]
+project-includes = ["src/", "tests/", "examples/", "docs/recipes/"]
+search-path = ["src"]
+python-version = "3.11"
+permissive-ignores = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/runlet"]
