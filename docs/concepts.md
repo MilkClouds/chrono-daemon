@@ -47,19 +47,40 @@ We do not ship lifecycle states beyond these three (no `configured`,
 
 The structured-concurrency root. `async with Supervisor(clock=...) as sup:`
 wraps an `anyio.create_task_group`. Inside the block you `sup.add(daemon)` or
-`sup.spawn(async_fn, *args)`. Each hosted daemon gets its own `Context` with
-its own cancel scope and a child logger.
+`sup.spawn(async_fn, *args)`. `sup.add` raises `TypeError` if you pass a
+non-`Daemon` (the most common mistake — passing the `@daemon` factory
+instead of calling it — gets a dedicated error message). Each hosted
+daemon gets its own `Context` with its own cancel scope and a child
+logger.
 
 On uncaught exception, `Supervisor.on_error` chooses:
 
-- `"shutdown"` (default) — re-raise; the task group cancels every sibling
-  and the exception escapes inside an `ExceptionGroup`. ADR 0004 explains
-  why this is the default.
+- `"shutdown"` (default) — re-raise wrapped in `DaemonError`; the task
+  group cancels every sibling and the exception escapes inside an
+  `ExceptionGroup`. ADR 0004 explains why this is the default.
 - `"restart"` — sleep on `ctx.clock` per `RestartPolicy` (exponential
   backoff), then re-enter `on_start`/`run`/`on_stop`. Because backoff goes
   through `ctx.clock.sleep`, restart timing is deterministic under
   `SimClock`.
 - `"ignore"` — log and let the daemon exit; siblings keep running.
+
+Shutdown surface (ADR 0009):
+
+- `sup.signal_stop()` — sync, fire-and-forget. Sets the shared stop event
+  every `Context` carries. Cooperative daemons (polling `ctx.stopping` or
+  using `runlet.recipes.cooperative_every`) exit naturally so `on_stop`
+  runs on the standard return path. Safe to call from inside a daemon.
+- `await sup.stop(grace, finalize_timeout)` — async. Signals stop, waits
+  up to `grace` wall-clock seconds for daemons to exit, then force-cancels
+  any still running. Even on the force-cancel path, each daemon's
+  `on_stop` is invoked best-effort inside a shielded scope bounded by
+  `finalize_timeout`. If `on_start` succeeded, `on_stop` is guaranteed on
+  every exit path (normal, shutdown, restart, ignore, cancel).
+
+`Context` carries `clock`, `cancel_scope`, `logger` (a
+`ClockAwareLoggerAdapter` that injects `sim_time` onto every log record),
+`name`, `supervisor`, plus the read-only `stop_event` and `stopping`
+shortcut for stop-aware loops.
 
 ## Composition
 
@@ -76,6 +97,12 @@ Supervisor                       (one per process, typically)
 Wiring is explicit: every channel and every consumer is a named reference in
 your code, not a runtime-discovered topic name. That's the deliberate tradeoff
 recorded in ADR 0001.
+
+Supervisors compose recursively. A daemon may itself open an inner
+`async with Supervisor(...)` and host its own sub-pipeline with its own
+`SimClock`. `examples/reflex_dual_multi_session.py` uses this pattern for
+per-session isolation — each session is a daemon on the outer supervisor
+that nests its own inner supervisor + clock. No new primitive needed.
 
 ## Invariants you can rely on
 

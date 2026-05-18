@@ -10,9 +10,14 @@ Each demo is self-contained in one file and is exercised by
 
 ## Index
 
-- [`reflex_dual_mock.py`](reflex_dual_mock.py) — System 2 / 1 / 0 inference
-  pipeline (mocked). Models the production architecture in
+- [`reflex_dual_mock.py`](reflex_dual_mock.py) — single-session System 2 /
+  1 / 0 inference pipeline (mocked). Models the production architecture in
   [worv-ai/reflex PR #191](https://github.com/worv-ai/reflex/pull/191).
+- [`reflex_dual_multi_session.py`](reflex_dual_multi_session.py) — extends
+  the single-session example with a `MockDispatcher` exposing
+  `register(sid, duration_s)` / `unregister(sid)`. Each session runs in an
+  inner `Supervisor` with its own `SimClock`; unregister fires a
+  per-session `anyio.Event` for clean targeted teardown.
 
 ---
 
@@ -108,15 +113,53 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   still inlines a 12-line implementation. Promoting it to
   `runlet.recipes.latest` is queued on the roadmap.
 
-### Honest verdict
+### Honest verdict (single-session)
 
 For the multi-rate reactive pattern that #191 implements, runlet's
-primitives compose into a 220-line, end-to-end-deterministic mock. There
-is no `Topic`, no QoS, no lifecycle state machine — and the absence of
-each was unambiguously a win for this workload. The pain points
-(`Supervisor.stop()`, sim-aware logging, `Latest[T]` recipe) are all
-small, targeted fixes that don't change the shape of the library.
+primitives compose into a single-file, end-to-end-deterministic mock with
+no `Topic`, no QoS, and no lifecycle state machine. The pain points
+identified while building it (`Supervisor.stop()`, sim-aware logging,
+`Latest[T]` recipe) were all small targeted fixes that didn't change the
+shape of the library.
 
 If we'd had to build this on raw `anyio`, the wins lost would have been:
 the deterministic clock, the lifecycle-managed daemon, and the typed
 channel. Those *are* the value runlet provides.
+
+---
+
+## Post-mortem: `reflex_dual_multi_session.py`
+
+Extends the single-session demo to the N-concurrent-sessions shape (one
+inner `Supervisor` per session, each with its own `SimClock`). The
+production analogue is #191's `HarnessDispatcher` + `TimeServerRegistry`
+combo: `register(session)` brings up the per-session loops, `unregister`
+tears them back down.
+
+### What worked without new primitives
+
+- **Supervisors nest.** The outer supervisor holds session daemons; each
+  daemon opens its own `async with Supervisor(...)` for the inner
+  S2/S1/S0/actuator set. No new core API needed — composition is a
+  property of `async with`.
+- **Per-session cancel via `anyio.Event`.** `MockDispatcher.register`
+  threads a fresh `anyio.Event` into the session daemon; `unregister(sid)`
+  sets it. The daemon checks `cancel_event.is_set()` between harness
+  steps and exits the inner supervisor with `inner.stop(grace=0)` —
+  cancellation is targeted, siblings are untouched.
+- **Each session keeps its own SimClock.** Independent virtual clocks fall
+  out of "inner supervisors get their own clock kwarg." Sessions with
+  different `duration_s` produce action counts proportional to their
+  duration; the test pins this.
+
+### Gaps not closed
+
+- **External tick fan-out is *not* shown.** Production's design doc names
+  `Dispatcher.tick(now_ns)` as the single wake source for every per-session
+  `S{N}Loop`. The example uses self-tick inside each inner supervisor's
+  harness loop instead — runlet-native, but a divergence from #191's
+  invariant. The `fanout.tee` recipe is the path if you need to mirror
+  the design-doc shape exactly.
+- **Multi-clock advance fan-out** (driving N inner SimClocks from one
+  outer tick) is likewise not shown — each session self-advances. Same
+  trade-off: simpler, and not a #191 byte-for-byte match.
