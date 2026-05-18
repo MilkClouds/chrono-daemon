@@ -10,36 +10,38 @@ default scheduler randomizes task-spawn order across runs, so cross-run logs
 on trio agree in length, in monotone time, and in distribution — but not
 bit-for-bit. See ``examples/README.md`` for the discussion.
 
-The ``driver`` daemon advances the SimClock by ``duration_s`` and then calls
-``ctx.supervisor.signal_stop()``. Every other daemon iterates with
-``cooperative_every`` so the stop signal terminates the pipeline naturally,
-with every ``on_stop`` running on the standard return path.
+In the production design (#191), observations are pushed *into* the dispatcher
+from outside: vla_eval's ``on_observation`` callback calls
+``dispatcher.push_obs`` + ``dispatcher.tick``. This mock follows the same
+shape — the supervisor's main task plays that "harness" role, writing the
+latest obs into ``obs_cache`` and advancing the SimClock between writes.
+There is no in-pipeline ``sensor`` daemon; obs is an external input.
 
 Pipeline layout (rates are virtual under ``SimClock``; numbers below mirror
 the rates in the production design doc at
 ``projects/reflex-train/docs/inference-refactor.md``):
 
-    sensor (20 Hz) ─▶ obs_cache  (Latest[Obs])
-                            │
-              ┌─────────────┴──────────────┐
-              ▼                            ▼
-        s2_planner (1 Hz)              s1_policy (10 Hz)
-        reads obs_cache,                reads obs_cache + subgoal_cache,
-        produces Subgoal                produces Chunk (8 actions)
-                  │                              │
-                  ▼                              ▼
-            subgoal_cache (Latest)        chunk_channel
-                                                 │
-                                                 ▼
-                                         s0_dispenser
-                                         pops chunk, emits one Action
-                                         every 1/S0_HZ (20 Hz)
-                                                 │
-                                                 ▼
-                                         action_channel
-                                                 │
-                                                 ▼
-                                         actuator (logs)
+    main task (harness) ─▶ obs_cache  (Latest[Obs])
+                                │
+                  ┌─────────────┴──────────────┐
+                  ▼                            ▼
+            s2_planner (1 Hz)              s1_policy (10 Hz)
+            reads obs_cache,                reads obs_cache + subgoal_cache,
+            produces Subgoal                produces Chunk (8 actions)
+                      │                              │
+                      ▼                              ▼
+                subgoal_cache (Latest)        chunk_channel
+                                                     │
+                                                     ▼
+                                             s0_dispenser
+                                             pops chunk, emits one Action
+                                             every 1/S0_HZ (20 Hz)
+                                                     │
+                                                     ▼
+                                             action_channel
+                                                     │
+                                                     ▼
+                                             actuator (logs)
 """
 
 from __future__ import annotations
@@ -111,9 +113,9 @@ class Latest(Generic[T]):
 #   - S2 fires at 1 Hz (period_ms: 1000)
 #   - S1 fires at 10 Hz (period_ms: 100)
 #   - S0 dispenses at the robot control rate (~20 Hz in the autonomous-mode example)
-#   - Sensor pushes at the sim-eval obs rate (20 Hz, matching S1's
-#     obs_sampling_rate_hz so training-distribution rates line up)
-SENSOR_HZ = 20.0
+# The harness pushes obs at S1's obs_sampling_rate_hz (20 Hz) so the inference
+# obs rate matches what S1 was trained against.
+OBS_RATE_HZ = 20.0
 S2_HZ = 1.0
 S1_HZ = 10.0
 S0_HZ = 20.0
@@ -124,15 +126,8 @@ S1_LATENCY = 0.02
 
 
 # --- daemons ---------------------------------------------------------------
-
-
-@daemon
-async def sensor(ctx: Context, obs_cache: Latest[Obs]) -> None:
-    """Emit one Obs per 1/SENSOR_HZ second into the shared cache."""
-    seq = 0
-    async for t in cooperative_every(ctx, 1.0 / SENSOR_HZ):
-        obs_cache.set(Obs(t=t, seq=seq))
-        seq += 1
+# Note: no sensor daemon. Obs is pushed by the harness (the supervisor's
+# main task in run_mock, mirroring vla_eval's on_observation callback).
 
 
 @daemon
@@ -224,10 +219,14 @@ async def actuator(
 async def run_mock(duration_s: float = 2.0) -> list[Action]:
     """Run the mock pipeline for ``duration_s`` virtual seconds.
 
-    The supervisor's main task drives the SimClock and then calls
-    ``await sup.stop(grace=0)`` to force-cancel any daemon still sleeping
-    on the (now-frozen) sim clock. Each daemon's ``try/finally`` closes its
-    downstream channel so the actuator drains cleanly.
+    The supervisor's main task plays the harness role: each iteration writes
+    an Obs into the shared cache (the in-process equivalent of
+    ``dispatcher.push_obs``) and then advances the SimClock by one obs period
+    (the equivalent of ``dispatcher.tick``). When the simulated duration is
+    exhausted it calls ``await sup.stop(grace=0)`` to force-cancel any daemon
+    still sleeping on the (now-frozen) sim clock. Each daemon's
+    ``try/finally`` closes its downstream channel so the actuator drains
+    cleanly.
 
     Returns the actuator log. Deterministic across runs on the asyncio backend.
     """
@@ -239,14 +238,19 @@ async def run_mock(duration_s: float = 2.0) -> list[Action]:
     log: list[Action] = []
 
     async with Supervisor(clock=clock) as sup:
-        sup.add(sensor(obs_cache))
         sup.add(s2_planner(obs_cache, subgoal_cache))
         sup.add(s1_policy(obs_cache, subgoal_cache, chunk_channel))
         sup.add(s0_dispenser(chunk_channel, action_channel))
         sup.add(actuator(action_channel, log))
-        # Drive the SimClock from the main task, then force-cancel.
-        await anyio.sleep(0)
-        await clock.advance(duration_s)
+
+        # Harness loop: push obs, advance, repeat.
+        obs_period = 1.0 / OBS_RATE_HZ
+        n_steps = max(1, int(round(duration_s / obs_period)))
+        for seq in range(n_steps):
+            obs_cache.set(Obs(t=clock.now(), seq=seq))
+            await anyio.sleep(0)  # let daemons schedule before time advances
+            await clock.advance(obs_period)
+
         await sup.stop(grace=0.0)
 
     return log
