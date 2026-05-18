@@ -30,9 +30,6 @@ exclude-newer = "2026-05-18T00:00:00+09:00"
 line-length = 119
 
 [tool.pyrefly]
-# Required because the surrounding worktree path is gitignored at the repo
-# root (.claude/worktrees/**), which makes pyrefly's default file discovery
-# miss every source file. Explicit includes work around the worktree-only quirk.
 project-includes = ["src/", "tests/", "examples/"]
 search-path = ["src"]
 
