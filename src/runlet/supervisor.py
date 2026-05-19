@@ -30,9 +30,9 @@ from __future__ import annotations
 import logging
 import warnings
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 import anyio.abc
@@ -43,7 +43,20 @@ from runlet.clock import Clock, WallClock
 from runlet.context import Context
 from runlet.daemon import Daemon, _FnDaemon
 
-__all__ = ["RestartPolicy", "Supervisor"]
+__all__ = ["DaemonHealth", "DaemonState", "RestartPolicy", "Supervisor"]
+
+DaemonState = Literal["starting", "running", "restarting", "stopped", "failed"]
+"""Lifecycle state surfaced by :class:`DaemonHealth`.
+
+- ``starting``: inside ``on_start`` or before it returns.
+- ``running``: ``on_start`` returned; ``run`` is executing.
+- ``restarting``: ``on_error="restart"`` is waiting out the backoff before
+  the next ``on_start``.
+- ``stopped``: the host returned normally (clean exit, ``on_stop`` ran).
+- ``failed``: the host exited because an exception escaped past all retries
+  (shutdown / ignore terminal / restart exhausted). ``last_error`` carries
+  the cause.
+"""
 
 
 @dataclass
@@ -59,6 +72,54 @@ class RestartPolicy:
     factor: float = 2.0
     cap: float = 5.0
     max_retries: int | None = None
+
+
+@dataclass(frozen=True)
+class DaemonHealth:
+    """Snapshot of one hosted daemon's runtime state.
+
+    Returned by :meth:`Supervisor.snapshot`. All times are read from the
+    supervisor's :class:`runlet.Clock`, so they advance under ``SimClock``
+    burst replay the same way the daemon's own timestamps do.
+
+    Frozen so consumers can pass it around without worrying about it
+    mutating mid-read; the supervisor holds the underlying mutable state.
+    """
+
+    name: str
+    state: DaemonState
+    restart_count: int
+    """How many times this daemon has been re-entered after a failure under
+    ``on_error="restart"``. Zero on first attempt; bumped before the next
+    ``on_start``.
+    """
+    last_error: BaseException | None
+    """The most recent exception that escaped ``run()`` (or ``on_start`` on
+    the failure paths). ``None`` if the daemon has never raised.
+    """
+    started_at: float | None
+    """Clock-time when the current attempt's ``on_start`` returned. ``None``
+    if the daemon has not yet finished ``on_start``. Reset on each restart.
+    """
+    uptime: float | None
+    """``clock.now() - started_at`` for the current attempt, or ``None`` if
+    ``started_at`` is. Computed at snapshot time so successive reads of
+    the same ``DaemonHealth`` don't drift.
+    """
+
+
+@dataclass
+class _DaemonRecord:
+    """Mutable per-daemon state owned by the supervisor's host loop."""
+
+    name: str
+    state: DaemonState = "starting"
+    restart_count: int = 0
+    last_error: BaseException | None = None
+    started_at: float | None = None
+    # Set by the host loop when on_start returns successfully (first attempt
+    # or any restart). Awaited by Supervisor.wait_all_started().
+    started_event: anyio.Event = field(default_factory=anyio.Event)
 
 
 @dataclass
@@ -88,6 +149,10 @@ class Supervisor:
         self._logger: logging.Logger = logger or logging.getLogger("runlet")
         self._tg: anyio.abc.TaskGroup | None = None
         self._pending: list[_PendingDaemon] = []
+        # Per-daemon mutable health state, keyed by daemon name. Populated on
+        # add(); kept in sync by the host loop as the daemon transitions
+        # between starting / running / restarting / stopped / failed.
+        self._records: dict[str, _DaemonRecord] = {}
         # Track names we've seen to surface accidental duplicates (which would
         # otherwise share a logger child and complicate cross-task diagnosis).
         self._seen_names: set[str] = set()
@@ -173,6 +238,10 @@ class Supervisor:
                 stacklevel=2,
             )
         self._seen_names.add(chosen)
+        # Create a fresh record per add(); the host loop mutates it as the
+        # daemon's state changes. Duplicate names will overwrite — the
+        # duplicate-name warning above already flagged that case.
+        self._records[chosen] = _DaemonRecord(name=chosen)
         if self._tg is None:
             self._pending.append(_PendingDaemon(daemon, chosen))
         else:
@@ -233,6 +302,70 @@ class Supervisor:
         if not self._all_done.is_set() and self._tg is not None:
             self._tg.cancel_scope.cancel()
 
+    # -- readiness barrier -----------------------------------------------------
+
+    async def wait_all_started(self) -> None:
+        """Block until every currently-hosted daemon's ``on_start`` has resolved.
+
+        "Resolved" means the host loop reached one of:
+        - ``on_start`` returned (record.state transitions to ``running``), or
+        - the daemon's lifecycle finished (failed / stopped before/during
+          ``on_start`` — see the failure paths in ``_host``).
+
+        Use this when a driver task wants to be sure every daemon is past its
+        setup phase before doing something time-sensitive (e.g. calling
+        :meth:`runlet.SimClock.advance` for deterministic burst replay — under
+        trio the scheduler can otherwise start ``advance`` before all daemons
+        register their first sleep, costing byte-determinism across runs).
+
+        Snapshot semantics: waits for the daemons known at call time; daemons
+        added afterwards aren't tracked by this call (call it again if you
+        need a fresh barrier). Safe to call before ``__aenter__`` (returns
+        immediately if nothing is registered yet) or after exit (events are
+        all set during host teardown, so this is a no-op).
+        """
+        # Snapshot the events so daemons added concurrently with this call
+        # don't shift the barrier.
+        events = [rec.started_event for rec in self._records.values()]
+        for ev in events:
+            await ev.wait()
+
+    # -- diagnostics -----------------------------------------------------------
+
+    def snapshot(self) -> dict[str, DaemonHealth]:
+        """Return a name -> :class:`DaemonHealth` map for all known daemons.
+
+        Cheap and read-only — safe to call from any task at any time, including
+        before ``__aenter__`` (returns daemons queued via ``add()``) and after
+        ``__aexit__`` (returns the terminal state of each daemon).
+
+        Uptime is computed at call time as ``clock.now() - started_at`` for
+        each ``running`` daemon. Under :class:`runlet.SimClock`, this advances
+        in lockstep with the rest of the simulation.
+        """
+        now = self._clock.now()
+        out: dict[str, DaemonHealth] = {}
+        for name, rec in self._records.items():
+            uptime: float | None
+            if rec.started_at is not None and rec.state == "running":
+                uptime = now - rec.started_at
+            elif rec.started_at is not None:
+                # Daemon has stopped / failed / is restarting — uptime reflects
+                # how long the *last* attempt ran for. We can't tell exactly
+                # without recording an exit timestamp; report None to avoid lying.
+                uptime = None
+            else:
+                uptime = None
+            out[name] = DaemonHealth(
+                name=name,
+                state=rec.state,
+                restart_count=rec.restart_count,
+                last_error=rec.last_error,
+                started_at=rec.started_at,
+                uptime=uptime,
+            )
+        return out
+
     # -- internals -------------------------------------------------------------
 
     def _on_daemon_exit(self) -> None:
@@ -257,6 +390,7 @@ class Supervisor:
         retries = 0
         cancelled_cls = anyio.get_cancelled_exc_class()
         assert self._stop_event is not None  # set in __aenter__
+        record = self._records[name]
         try:
             while True:
                 # Each attempt gets a fresh cancel scope so the daemon can cancel
@@ -271,12 +405,18 @@ class Supervisor:
                     stop_event=self._stop_event,
                 )
                 on_start_done = False
+                record.state = "starting"
+                record.started_at = None
                 try:
                     with scope:
                         await daemon.on_start(ctx)
                         on_start_done = True
+                        record.state = "running"
+                        record.started_at = self._clock.now()
+                        record.started_event.set()
                         await daemon.run(ctx)
                         await daemon.on_stop(ctx)
+                    record.state = "stopped"
                     return
                 except BaseException as exc:
                     # If on_start succeeded, on_stop is owed regardless of how we exit.
@@ -284,24 +424,42 @@ class Supervisor:
                     if on_start_done:
                         await self._run_on_stop_shielded(daemon, ctx)
                     if isinstance(exc, cancelled_cls):
+                        # Cancellation isn't a failure of the daemon's own logic
+                        # — record stopped, then propagate.
+                        record.state = "stopped"
                         raise
                     if not isinstance(exc, Exception):
+                        record.state = "failed"
+                        record.last_error = exc
                         raise
+                    record.last_error = exc
                     ctx.logger.exception("daemon raised")
                     if self._on_error == "shutdown":
+                        record.state = "failed"
                         raise DaemonError(f"daemon {name!r} failed: {exc}") from exc
                     if self._on_error == "ignore":
+                        record.state = "stopped"
                         return
                     # restart path — but bail out if stop was already signaled.
                     if self._stop_event.is_set():
+                        record.state = "stopped"
                         return
                     retries += 1
+                    record.restart_count = retries
                     if self._restart.max_retries is not None and retries > self._restart.max_retries:
+                        record.state = "failed"
                         ctx.logger.error("daemon exceeded max_retries=%d; giving up", self._restart.max_retries)
                         raise DaemonError(f"daemon {name!r} exceeded max_retries={self._restart.max_retries}") from exc
+                    record.state = "restarting"
                     await self._clock.sleep(delay)
                     delay = min(delay * self._restart.factor, self._restart.cap)
         finally:
+            # Unblock wait_all_started() even if on_start never succeeded —
+            # otherwise a daemon that fails before/inside on_start would hang
+            # any concurrent waiter forever. The waiter is expected to inspect
+            # state via snapshot() if it needs to distinguish started-cleanly
+            # from never-started.
+            record.started_event.set()
             self._on_daemon_exit()
 
     async def _run_on_stop_shielded(self, daemon: Daemon, ctx: Context) -> None:

@@ -9,6 +9,7 @@ __all__ = [
     "DaemonError",
     "EndOfStream",
     "OnError",
+    "WouldBlock",
 ]
 
 
@@ -23,6 +24,19 @@ class ChannelClosed(Exception):
     """Raised by `SendStream.send()` after the receive side has been closed.
 
     The send-side has nowhere to deliver, so the call cannot make progress.
+    """
+
+
+class WouldBlock(Exception):
+    """Raised by `SendStream.send_nowait()` / `ReceiveStream.receive_nowait()` when
+    the operation cannot complete immediately.
+
+    The async ``send``/``receive`` variants block instead of raising this. The
+    nowait variants exist as the enabling primitive for lossy backpressure
+    recipes (e.g. ``recipes.lossy.DropOldestSend``) — see ADR 0001 for why
+    drop policies live at the recipe layer rather than on Channel itself.
+
+    Mirrors anyio's `WouldBlock` so users don't have to import anyio.
     """
 
 

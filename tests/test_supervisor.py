@@ -13,7 +13,7 @@ import warnings
 import anyio
 import pytest
 
-from runlet import Context, Daemon, DaemonError, RestartPolicy, SimClock, Supervisor
+from runlet import Context, Daemon, DaemonError, DaemonHealth, RestartPolicy, SimClock, Supervisor
 
 pytestmark = pytest.mark.anyio
 
@@ -327,6 +327,207 @@ async def test_each_daemon_gets_its_own_cancel_scope() -> None:
 
     assert len(scopes) == 2
     assert scopes[0] is not scopes[1]
+
+
+# -- snapshot / DaemonHealth ---------------------------------------------------
+
+
+async def test_snapshot_lists_pending_daemons_before_entry() -> None:
+    """Before __aenter__, snapshot() shows queued daemons in the 'starting' state."""
+    clock = SimClock()
+
+    class _Quick(Daemon):
+        async def run(self, ctx: Context) -> None:
+            pass
+
+    sup = Supervisor(clock=clock)
+    sup.add(_Quick(), name="a")
+    sup.add(_Quick(), name="b")
+
+    snap = sup.snapshot()
+    assert set(snap.keys()) == {"a", "b"}
+    assert all(isinstance(h, DaemonHealth) for h in snap.values())
+    assert all(h.state == "starting" for h in snap.values())
+    assert all(h.restart_count == 0 for h in snap.values())
+    assert all(h.last_error is None for h in snap.values())
+    assert all(h.started_at is None for h in snap.values())
+
+
+async def test_snapshot_reports_running_state_and_uptime_under_simclock() -> None:
+    """A daemon mid-run() shows state='running' with uptime advancing with the clock."""
+    clock = SimClock()
+    seen_uptimes: list[float | None] = []
+    in_run = anyio.Event()
+
+    class _Sleeper(Daemon):
+        async def run(self, ctx: Context) -> None:
+            in_run.set()
+            await ctx.clock.sleep(10.0)
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_Sleeper(), name="sleeper")
+        await in_run.wait()
+        # Take a snapshot immediately after on_start.
+        snap = sup.snapshot()
+        assert snap["sleeper"].state == "running"
+        assert snap["sleeper"].started_at == 0.0
+        assert snap["sleeper"].uptime == 0.0
+
+        await clock.advance(3.0)
+        snap = sup.snapshot()
+        assert snap["sleeper"].uptime == pytest.approx(3.0)
+        seen_uptimes.append(snap["sleeper"].uptime)
+
+        await sup.stop(grace=0.0)
+
+    assert seen_uptimes == [pytest.approx(3.0)]
+
+
+async def test_snapshot_after_failure_under_ignore_shows_failed_or_stopped() -> None:
+    """Under on_error='ignore', a raising daemon ends as 'stopped' with last_error set."""
+    clock = SimClock()
+
+    class _Crashes(Daemon):
+        async def run(self, ctx: Context) -> None:
+            raise RuntimeError("kaboom")
+
+    sup = Supervisor(clock=clock, on_error="ignore")
+    async with sup:
+        sup.add(_Crashes(), name="crasher")
+
+    snap = sup.snapshot()
+    assert snap["crasher"].state == "stopped"
+    assert isinstance(snap["crasher"].last_error, RuntimeError)
+    assert "kaboom" in str(snap["crasher"].last_error)
+
+
+async def test_snapshot_restart_count_increments_through_backoff() -> None:
+    """restart_count climbs each time the daemon is re-entered."""
+    clock = SimClock()
+
+    class _FailsTwice(Daemon):
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def run(self, ctx: Context) -> None:
+            self.attempts += 1
+            if self.attempts <= 2:
+                raise RuntimeError(f"fail #{self.attempts}")
+
+    failing = _FailsTwice()
+    policy = RestartPolicy(base=0.05, factor=2.0, cap=1.0)
+
+    sup = Supervisor(clock=clock, on_error="restart", restart=policy)
+    async with sup:
+        sup.add(failing, name="flapper")
+        await anyio.sleep(0)
+        await clock.advance(1.0)
+
+    snap = sup.snapshot()
+    # The final iteration succeeded; restart_count reflects the two failures.
+    assert snap["flapper"].restart_count == 2
+    assert snap["flapper"].state == "stopped"
+    assert isinstance(snap["flapper"].last_error, RuntimeError)
+
+
+async def test_snapshot_failed_under_shutdown_policy() -> None:
+    """Under on_error='shutdown', the daemon's record ends as 'failed'."""
+    clock = SimClock()
+
+    class _Crashes(Daemon):
+        async def run(self, ctx: Context) -> None:
+            raise RuntimeError("boom")
+
+    sup = Supervisor(clock=clock)
+    with pytest.raises(BaseExceptionGroup):
+        async with sup:
+            sup.add(_Crashes(), name="boomer")
+
+    snap = sup.snapshot()
+    assert snap["boomer"].state == "failed"
+    assert isinstance(snap["boomer"].last_error, RuntimeError)
+
+
+# -- wait_all_started ----------------------------------------------------------
+
+
+async def test_wait_all_started_blocks_until_on_start_completes() -> None:
+    """Driver waits past on_start before advancing — daemons all see their
+    own ctx.clock.sleep registered before time moves.
+    """
+    clock = SimClock()
+    started_times: list[float] = []
+
+    class _SlowStart(Daemon):
+        async def on_start(self, ctx: Context) -> None:
+            # Pretend setup is slow — but we only need the *callsite* of
+            # wait_all_started to wait until this returns.
+            pass
+
+        async def run(self, ctx: Context) -> None:
+            started_times.append(ctx.clock.now())
+            await ctx.clock.sleep(1.0)
+
+    async with Supervisor(clock=clock) as sup:
+        for i in range(5):
+            sup.add(_SlowStart(), name=f"d{i}")
+        await sup.wait_all_started()
+        # All daemons are past on_start. Their run() should have appended
+        # their start time before we advance.
+        snap = sup.snapshot()
+        assert all(h.state == "running" for h in snap.values()), snap
+        await clock.advance(2.0)
+
+    assert len(started_times) == 5
+    # All started at t=0.
+    assert all(t == 0.0 for t in started_times)
+
+
+async def test_wait_all_started_returns_immediately_for_failed_on_start() -> None:
+    """If a daemon's on_start raises (so the host exits without ever marking
+    started=True), wait_all_started must NOT hang — the host's finally
+    unblocks the event.
+    """
+    clock = SimClock()
+
+    class _StartCrashes(Daemon):
+        async def on_start(self, ctx: Context) -> None:
+            raise RuntimeError("init failed")
+
+        async def run(self, ctx: Context) -> None:
+            pass  # unreachable
+
+    async with Supervisor(clock=clock, on_error="ignore") as sup:
+        sup.add(_StartCrashes(), name="crasher")
+        # Without the finally guard, this would hang forever.
+        with anyio.move_on_after(1.0) as scope:
+            await sup.wait_all_started()
+        assert not scope.cancel_called, "wait_all_started should have returned"
+
+
+async def test_wait_all_started_is_a_snapshot_barrier() -> None:
+    """Daemons added after wait_all_started() returns are not part of that barrier."""
+    clock = SimClock()
+    in_run = anyio.Event()
+
+    class _BlocksOnEvent(Daemon):
+        def __init__(self, ev: anyio.Event) -> None:
+            self._ev = ev
+
+        async def on_start(self, ctx: Context) -> None:
+            self._ev.set()
+
+        async def run(self, ctx: Context) -> None:
+            await ctx.clock.sleep(100)
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_BlocksOnEvent(in_run), name="first")
+        await sup.wait_all_started()
+        # Adding a new daemon now should not retroactively unstart the
+        # barrier we already passed.
+        snap = sup.snapshot()
+        assert snap["first"].state == "running"
+        await sup.stop(grace=0.0)
 
 
 # -- helpers -------------------------------------------------------------------

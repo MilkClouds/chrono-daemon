@@ -5,7 +5,7 @@ from __future__ import annotations
 import anyio
 import pytest
 
-from runlet import Channel, ChannelClosed, EndOfStream, open_channel
+from runlet import Channel, ChannelClosed, EndOfStream, WouldBlock, open_channel
 
 pytestmark = pytest.mark.anyio
 
@@ -134,3 +134,41 @@ async def test_competing_consumers_share_items() -> None:
     assert len(received_by_b) > 0
     assert sorted(received_by_a + received_by_b) == list(range(20))
     assert len(set(received_by_a) & set(received_by_b)) == 0
+
+
+# -- send_nowait / receive_nowait ---------------------------------------------
+
+
+async def test_send_nowait_fills_buffer_without_blocking() -> None:
+    ch: Channel[int] = open_channel(maxsize=2)
+    ch.send.send_nowait(1)
+    ch.send.send_nowait(2)
+    assert ch.send.statistics().current_buffer_used == 2
+    with pytest.raises(WouldBlock):
+        ch.send.send_nowait(3)
+
+
+async def test_receive_nowait_drains_buffer_then_raises_wouldblock() -> None:
+    ch: Channel[int] = open_channel(maxsize=4)
+    ch.send.send_nowait("a")  # type: ignore[arg-type]
+    ch.send.send_nowait("b")  # type: ignore[arg-type]
+    assert ch.recv.receive_nowait() == "a"
+    assert ch.recv.receive_nowait() == "b"
+    with pytest.raises(WouldBlock):
+        ch.recv.receive_nowait()
+
+
+async def test_send_nowait_on_closed_recv_raises_channel_closed() -> None:
+    ch: Channel[int] = open_channel(maxsize=4)
+    await ch.recv.aclose()
+    with pytest.raises(ChannelClosed):
+        ch.send.send_nowait(1)
+
+
+async def test_receive_nowait_after_send_close_raises_end_of_stream() -> None:
+    ch: Channel[int] = open_channel(maxsize=4)
+    ch.send.send_nowait(1)
+    await ch.send.aclose()
+    assert ch.recv.receive_nowait() == 1
+    with pytest.raises(EndOfStream):
+        ch.recv.receive_nowait()

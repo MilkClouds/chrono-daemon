@@ -20,6 +20,7 @@ Use them by importing directly:
     from runlet.recipes.cooperative_every import cooperative_every
     from runlet.recipes.sync_bridge import host_async_dispatcher
     from runlet.recipes.latest import Latest
+    from runlet.recipes.lossy import DropOldestSend, DropNewestSend, CoalesceSend
 
 The corresponding design notes live in ``docs/recipes.md``.
 """

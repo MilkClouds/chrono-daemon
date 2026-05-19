@@ -21,7 +21,7 @@ from typing import Generic, Protocol, TypeVar
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
-from runlet._types import ChannelClosed, EndOfStream
+from runlet._types import ChannelClosed, EndOfStream, WouldBlock
 
 __all__ = ["Channel", "ChannelStats", "ReceiveStream", "SendStream", "open_channel"]
 
@@ -68,6 +68,16 @@ class SendStream(Protocol[T]):
         """
         ...
 
+    def send_nowait(self, item: T) -> None:
+        """Send an item without blocking. Raises ``WouldBlock`` if the buffer is full.
+
+        Enabling primitive for lossy-backpressure recipes (e.g.
+        ``recipes.lossy.DropOldestSend``); typical daemon code should reach for
+        the async ``send``. Raises ``ChannelClosed`` if the receive side has
+        been closed.
+        """
+        ...
+
     async def aclose(self) -> None:
         """Close the send side. Waiting receivers get ``EndOfStream`` after the buffer drains."""
         ...
@@ -84,6 +94,15 @@ class ReceiveStream(Protocol[T]):
         """Receive one item. Blocks until an item is available.
 
         Raises ``EndOfStream`` if the send side has been closed and the buffer is drained.
+        """
+        ...
+
+    def receive_nowait(self) -> T:
+        """Receive one item without blocking. Raises ``WouldBlock`` if the buffer is empty.
+
+        Enabling primitive for lossy-backpressure recipes. Raises
+        ``EndOfStream`` if the send side has been closed and the buffer is
+        drained.
         """
         ...
 
@@ -138,6 +157,16 @@ class _Send(Generic[T]):
         except anyio.ClosedResourceError as e:
             raise ChannelClosed("send side already closed") from e
 
+    def send_nowait(self, item: T) -> None:
+        try:
+            self._inner.send_nowait(item)
+        except anyio.WouldBlock as e:
+            raise WouldBlock("channel buffer full") from e
+        except anyio.BrokenResourceError as e:
+            raise ChannelClosed("receive side closed") from e
+        except anyio.ClosedResourceError as e:
+            raise ChannelClosed("send side already closed") from e
+
     async def aclose(self) -> None:
         await self._inner.aclose()
 
@@ -154,6 +183,16 @@ class _Recv(Generic[T]):
     async def receive(self) -> T:
         try:
             return await self._inner.receive()
+        except anyio.EndOfStream as e:
+            raise EndOfStream from e
+        except anyio.ClosedResourceError as e:
+            raise EndOfStream from e
+
+    def receive_nowait(self) -> T:
+        try:
+            return self._inner.receive_nowait()
+        except anyio.WouldBlock as e:
+            raise WouldBlock("channel empty") from e
         except anyio.EndOfStream as e:
             raise EndOfStream from e
         except anyio.ClosedResourceError as e:

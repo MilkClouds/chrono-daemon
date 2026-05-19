@@ -16,6 +16,7 @@ from __future__ import annotations
 import heapq
 import itertools
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import anyio
@@ -23,8 +24,13 @@ import anyio.lowlevel
 
 __all__ = ["Clock", "SimClock", "WallClock"]
 
-# Yields between wakes so a woken task can register a follow-up sleep before
-# the next heap check. asyncio settles in 1, trio sometimes needs a few.
+# Number of checkpoints yielded between heap inspections to let woken tasks
+# resume *and* let chained downstream tasks progress (wake → send → consumer
+# receives → consumer registers next sleep → ...). The right floor depends on
+# both backend scheduling fairness (trio randomizes spawn order) and pipeline
+# depth (a 3-stage chain needs ~3 checkpoints to drain to the next sleep). 8
+# is the empirically validated worst case across the test suite; lowering it
+# without a model of pipeline depth breaks the integration tests silently.
 _SETTLE_ROUNDS = 8
 
 
@@ -75,6 +81,25 @@ class WallClock:
                 next_t += period
 
 
+@dataclass
+class _Waiter:
+    """One sleeper registered against a SimClock.
+
+    ``cancelled`` is a lazy-delete flag: a cancelled sleeper leaves its entry in
+    the heap and ``advance_to`` skips it on pop. This is the standard heapq
+    pattern for cheap cancellation (avoids the O(n) list remove + heapify the
+    old eager-delete code used).
+    """
+
+    deadline: float
+    seq: int
+    event: anyio.Event = field(compare=False)
+    cancelled: bool = field(default=False, compare=False)
+
+    def __lt__(self, other: _Waiter) -> bool:
+        return (self.deadline, self.seq) < (other.deadline, other.seq)
+
+
 class SimClock:
     """Deterministic virtual clock.
 
@@ -99,8 +124,10 @@ class SimClock:
 
     def __init__(self, t0: float = 0.0) -> None:
         self._t = float(t0)
-        # Heap entries are (deadline, seq, event). seq breaks ties stably.
-        self._waiters: list[tuple[float, int, anyio.Event]] = []
+        # Min-heap of pending sleepers ordered by (deadline, seq). seq breaks
+        # ties stably. Cancelled entries stay in the heap with cancelled=True
+        # and are skipped on pop.
+        self._waiters: list[_Waiter] = []
         self._seq = itertools.count()
 
     def now(self) -> float:
@@ -111,20 +138,21 @@ class SimClock:
         await anyio.lowlevel.checkpoint()
         if seconds <= 0:
             return
-        ev = anyio.Event()
-        entry = (self._t + seconds, next(self._seq), ev)
-        heapq.heappush(self._waiters, entry)
+        waiter = _Waiter(deadline=self._t + seconds, seq=next(self._seq), event=anyio.Event())
+        heapq.heappush(self._waiters, waiter)
         try:
-            await ev.wait()
+            await waiter.event.wait()
         finally:
-            # If the event was never set (cancellation), drop the entry so the
-            # heap doesn't grow unboundedly under repeated cancel-and-restart.
-            if not ev.is_set():
-                try:
-                    self._waiters.remove(entry)
-                    heapq.heapify(self._waiters)
-                except ValueError:
-                    pass  # already popped by advance_to between set() and wait wake-up
+            # Lazy delete: mark cancelled and let advance_to skip on pop. Cheaper
+            # than the O(n) list-remove + heapify the older eager-delete used,
+            # and asymptotically correct because cancelled entries cannot
+            # outlive the pops that would have woken them. We also opportunistically
+            # drain cancelled entries from the top of the heap so a lone cancelled
+            # sleeper doesn't linger past its own cancellation.
+            if not waiter.event.is_set():
+                waiter.cancelled = True
+                while self._waiters and self._waiters[0].cancelled:
+                    heapq.heappop(self._waiters)
 
     async def advance(self, dt: float) -> None:
         """Advance virtual time by ``dt`` seconds."""
@@ -135,32 +163,46 @@ class SimClock:
     async def advance_to(self, t: float) -> None:
         """Advance virtual time to absolute ``t``. Idempotent for already-past values.
 
-        Wakes sleepers one at a time in (deadline, insertion-order) order. After each
-        wake we yield ``_SETTLE_ROUNDS`` times so the woken task can run and possibly
-        register a follow-up sleep — that follow-up may itself be in range and will
-        be picked up on the next iteration. When the heap settles with nothing due
-        by ``t``, we finalize ``self._t`` and return.
-
-        The settle loop exists because trio's scheduler doesn't necessarily resume
-        a woken task on a single ``checkpoint()`` round; asyncio usually does. We
-        spin a fixed budget of yields rather than calling backend-specific helpers.
+        Wakes sleepers one at a time in (deadline, insertion-order) order. After
+        each wake we yield ``_SETTLE_ROUNDS`` checkpoints so the woken task can
+        run, send/receive through downstream channels, and possibly register a
+        follow-up sleep before the next heap inspection. When the heap settles
+        with nothing due by ``t``, we yield the same budget once more and
+        finalize if no new in-range sleeper appeared.
         """
         if t < self._t:
             return
         while True:
-            if not (self._waiters and self._waiters[0][0] <= t):
-                # Heap appears empty; let any pending wakeups settle and check again.
-                for _ in range(_SETTLE_ROUNDS):
-                    await anyio.lowlevel.checkpoint()
-                if not (self._waiters and self._waiters[0][0] <= t):
+            self._drop_cancelled_tops()
+            if not self._waiters or self._waiters[0].deadline > t:
+                if not await self._poll_for_inrange(t):
                     break
                 continue
-            deadline, _, ev = heapq.heappop(self._waiters)
-            self._t = deadline
-            ev.set()
+            waiter = heapq.heappop(self._waiters)
+            if waiter.cancelled:
+                # Raced with cancellation between top-skip and pop; just retry.
+                continue
+            self._t = waiter.deadline
+            waiter.event.set()
             for _ in range(_SETTLE_ROUNDS):
                 await anyio.lowlevel.checkpoint()
         self._t = max(self._t, t)
+
+    def _drop_cancelled_tops(self) -> None:
+        """Pop any cancelled entries sitting at the top of the heap."""
+        while self._waiters and self._waiters[0].cancelled:
+            heapq.heappop(self._waiters)
+
+    async def _poll_for_inrange(self, t: float) -> bool:
+        """Yield ``_SETTLE_ROUNDS`` checkpoints and report whether a new
+        in-range sleeper appeared during the settle. The full budget is
+        required: a shorter poll races against in-flight task chains that
+        register their follow-up sleeps several checkpoints after waking.
+        """
+        for _ in range(_SETTLE_ROUNDS):
+            await anyio.lowlevel.checkpoint()
+        self._drop_cancelled_tops()
+        return bool(self._waiters) and self._waiters[0].deadline <= t
 
     async def every(self, period: float) -> AsyncIterator[float]:
         if period <= 0:

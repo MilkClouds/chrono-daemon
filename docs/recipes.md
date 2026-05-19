@@ -54,3 +54,12 @@ The stability contract is restated at the top of
   invoke its dispatcher via `BlockingPortal`. The shape every "async
   dispatcher behind a sync ABC" deployment ends up at (e.g. PR #191's
   `ReFlExDualDispatcherServer`).
+- **`runlet.recipes.lossy.DropNewestSend / DropOldestSend / CoalesceSend`** —
+  [`lossy.py`](../src/runlet/recipes/lossy.py). `SendStream` wrappers
+  that never block the producer when the buffer is full: discard the
+  incoming item, evict the oldest buffered item, or single-slot coalesce
+  to "latest wins". Each tracks a `dropped` counter. Built on the
+  `send_nowait`/`receive_nowait` primitives — the reason those exist on
+  the `SendStream`/`ReceiveStream` protocols at all. `DropOldestSend` /
+  `CoalesceSend` are in-process only (they need `ReceiveStream` access);
+  a network transport would implement the same policy server-side.

@@ -190,3 +190,79 @@ async def test_simclock_sleep_removes_entry_on_cancellation() -> None:
         tg.cancel_scope.cancel()
 
     assert len(clock._waiters) == 0, "cancelled sleepers must leave the heap"
+
+
+async def test_simclock_mid_heap_cancellation_cleared_by_advance() -> None:
+    """A cancelled entry sitting in the middle of the heap is dropped on the
+    next ``advance_to`` pop sequence (lazy-delete invariant).
+    """
+    import anyio.lowlevel
+
+    clock = SimClock()
+    started_a, started_b, started_c = anyio.Event(), anyio.Event(), anyio.Event()
+    log: list[str] = []
+
+    async def sleeper(name: str, dt: float, started: anyio.Event) -> None:
+        started.set()
+        try:
+            await clock.sleep(dt)
+        except BaseException:
+            log.append(f"{name}-cancelled")
+            raise
+        else:
+            log.append(f"{name}-woke")
+
+    b_scope: anyio.CancelScope | None = None
+
+    async def b_with_scope() -> None:
+        nonlocal b_scope
+        with anyio.CancelScope() as scope:
+            b_scope = scope
+            await sleeper("B", 2.0, started_b)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper, "A", 1.0, started_a)
+        tg.start_soon(b_with_scope)
+        tg.start_soon(sleeper, "C", 3.0, started_c)
+        await started_a.wait()
+        await started_b.wait()
+        await started_c.wait()
+        for _ in range(5):
+            await anyio.lowlevel.checkpoint()
+        # All three registered; cancel B (middle entry).
+        assert b_scope is not None
+        b_scope.cancel()
+        # Now advance — the cancelled B should be skipped on pop, A wakes at 1.0,
+        # C at 3.0, but the clock does not jump to B's deadline of 2.0.
+        await clock.advance(5.0)
+
+    assert "A-woke" in log
+    assert "C-woke" in log
+    assert "B-cancelled" in log
+    # No live waiters remain.
+    assert all(w.cancelled for w in clock._waiters)
+
+
+async def test_simclock_advance_breaks_early_when_no_followup_sleep() -> None:
+    """The empty-heap polling path breaks as soon as a new in-range sleeper
+    appears, instead of always burning the full ``_SETTLE_ROUNDS`` budget.
+
+    We rely on a black-box check: that the canary determinism holds even when
+    a woken task does not register a follow-up sleep. (Performance is exercised
+    by the canary's existing per-backend timing budget.)
+    """
+    clock = SimClock()
+    woke: list[str] = []
+
+    async def one_shot(name: str, dt: float) -> None:
+        await clock.sleep(dt)
+        woke.append(name)
+
+    async with anyio.create_task_group() as tg:
+        for i, dt in enumerate([0.5, 1.0, 1.5]):
+            tg.start_soon(one_shot, f"d{i}", dt)
+        await anyio.sleep(0)
+        await clock.advance(2.0)
+
+    assert woke == ["d0", "d1", "d2"]
+    assert clock.now() == 2.0
