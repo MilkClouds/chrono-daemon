@@ -1,6 +1,6 @@
-# examples — end-to-end demos and ergonomic stress-tests
+# examples: end-to-end demos and ergonomic stress-tests
 
-This folder holds full, runnable demos of runlet on realistic patterns —
+This folder holds full, runnable demos of runlet on realistic patterns:
 larger than `runlet.recipes` helpers, smaller than a production system. They
 double as **ergonomic stress-tests**: building each one is a check that the
 core primitives compose cleanly on a real workload.
@@ -10,10 +10,10 @@ Each demo is self-contained in one file and is exercised by
 
 ## Index
 
-- [`reflex_dual_mock.py`](../../examples/reflex_dual_mock.py) — single-session System 2 /
+- [`system_stack_mock.py`](../../examples/system_stack_mock.py): single-session System 2 /
   1 / 0 inference pipeline (mocked). Models a production-style three-rate
   inference architecture.
-- [`reflex_dual_multi_session.py`](../../examples/reflex_dual_multi_session.py) — extends
+- [`system_stack_multi_session.py`](../../examples/system_stack_multi_session.py): extends
   the single-session example with a `MockDispatcher` exposing
   `register(sid, duration_s)` / `unregister(sid)`. Each session runs in an
   inner `Supervisor` with its own `SimClock`; unregister fires a
@@ -21,7 +21,7 @@ Each demo is self-contained in one file and is exercised by
 
 ---
 
-## Ergonomic post-mortem: `reflex_dual_mock.py`
+## Ergonomic post-mortem: `system_stack_mock.py`
 
 The mock implements a three-stage cascade: slow planner (S2), fast policy
 (S1), and high-rate motor dispenser (S0). Every model
@@ -45,7 +45,7 @@ The claim "byte-identical across runs" holds on asyncio. It does **not**
 hold on trio: trio's default scheduler intentionally randomizes task-spawn
 order across runs as an ASLR-like measure against accidental ordering
 dependence. On trio our pipeline produces logs of the same length, with
-monotone time and matching action distributions — but the precise sequence
+monotone time and matching action distributions, but the precise sequence
 of actions emitted in the first few SimClock ticks can shift between
 otherwise identical runs.
 
@@ -55,7 +55,7 @@ pin the backend (use asyncio in tests), or gate every daemon behind a
 shared `anyio.Event` and `set()` it after all daemons are registered, so
 all first-iteration sleeps register at the same simulated instant. The
 shared-event gate is short enough (5 lines on every daemon) that it's a
-recipe candidate rather than a core feature — see `docs/roadmap.md`.
+recipe candidate rather than a core feature. See `docs/roadmap.md`.
 
 ### What felt clean
 
@@ -64,7 +64,7 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   scheduler bookkeeping, no callback registration, no lifecycle state
   machine.
 - **Rate control is one line.** `async for t in ctx.clock.every(1/S2_HZ):`
-  reads as "wake every 0.5 s of *sim* time" — and that's exactly what it
+  reads as "wake every 0.5 s of *sim* time", and that's exactly what it
   does under `SimClock`. No `rclpy.Rate`-style fudging.
 - **`SimClock` made the whole thing free to test.** A 10-second scenario
   takes microseconds of wall time, and `pytest.mark.parametrize` over
@@ -87,7 +87,7 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
 - **Decimation (`if counter % decimate: continue`) is manual.** ROS-style
   systems with `obs_sampling_rate_hz` express this as a config field; we
   express it as a one-line if. The one-line if is fine, but it's an
-  argument for *not* adding a decimation primitive — three different
+  argument for *not* adding a decimation primitive because three different
   daemons would each want their own definition.
 
 ### Gaps surfaced (and what we did with them)
@@ -95,7 +95,7 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
 - **No external way to bring the supervisor down without a sentinel.**
   The first draft had a `_PipelineDone` exception raised by a `driver`
   daemon, swallowed at the call site with `except* _PipelineDone`. That
-  pattern was both noisy and wrong — every long-running deployment would
+  pattern was both noisy and wrong: every long-running deployment would
   reinvent it. Promoted to `Supervisor.signal_stop()` / `await stop()`
   (ADR 0009). The example's main task now does
   `await clock.advance(N); await sup.stop(grace=0)`; no sentinel.
@@ -105,7 +105,7 @@ recipe candidate rather than a core feature — see `docs/roadmap.md`.
   `record.sim_time` available to any format string (ADR 0008).
 - **Exception path lost daemon identity.** A daemon failing under
   `on_error="shutdown"` produced a plain `RuntimeError` inside the
-  `ExceptionGroup` — no name attached. Promoted to `DaemonError`
+  `ExceptionGroup`, with no name attached. Promoted to `DaemonError`
   wrapping the daemon name as the leaf (ADR 0008).
 
 ### Honest verdict (single-session)
@@ -123,24 +123,24 @@ channel. Those *are* the value runlet provides.
 
 ---
 
-## Post-mortem: `reflex_dual_multi_session.py`
+## Post-mortem: `system_stack_multi_session.py`
 
 Extends the single-session demo to the N-concurrent-sessions shape (one
-inner `Supervisor` per session, each with its own `SimClock`). The
-production analogue is a `HarnessDispatcher` + `TimeServerRegistry`
-combo. `register(session)` brings up the per-session loops, `unregister`
-tears them back down.
+inner `Supervisor` per session, each with its own `SimClock`). The closest
+service analogue is a session dispatcher plus a per-session clock registry:
+`register(session)` brings up the per-session loops, and `unregister` tears
+them back down.
 
 ### What worked without new primitives
 
 - **Supervisors nest.** The outer supervisor holds session daemons; each
   daemon opens its own `async with Supervisor(...)` for the inner
-  S2/S1/S0/actuator set. No new core API needed — composition is a
+  S2/S1/S0/actuator set. No new core API needed; composition is a
   property of `async with`.
 - **Per-session cancel via `anyio.Event`.** `MockDispatcher.register`
   threads a fresh `anyio.Event` into the session daemon; `unregister(sid)`
   sets it. The daemon checks `cancel_event.is_set()` between harness
-  steps and exits the inner supervisor with `inner.stop(grace=0)` —
+  steps and exits the inner supervisor with `inner.stop(grace=0)`;
   cancellation is targeted, siblings are untouched.
 - **Each session keeps its own SimClock.** Independent virtual clocks fall
   out of "inner supervisors get their own clock kwarg." Sessions with
@@ -149,12 +149,12 @@ tears them back down.
 
 ### Gaps not closed
 
-- **External tick fan-out is *not* shown.** Production's design doc names
+- **External tick fan-out is *not* shown.** Some service designs use
   `Dispatcher.tick(now_ns)` as the single wake source for every per-session
-  `S{N}Loop`. The example uses self-tick inside each inner supervisor's
-  harness loop instead — runlet-native, but a divergence from the original
-  external-tick invariant. The `fanout.tee` recipe is the path if you need to mirror
-  the production shape exactly.
+  `S{N}` loop. The example uses self-tick inside each inner supervisor's
+  harness loop instead. This is runlet-native, but it differs from an
+  external-tick invariant. The `fanout.tee` recipe is the path if you need to
+  mirror that shape exactly.
 - **Multi-clock advance fan-out** (driving N inner SimClocks from one
-  outer tick) is likewise not shown — each session self-advances. Same
+  outer tick) is likewise not shown; each session self-advances. Same
   trade-off: simpler, and not a byte-for-byte match for an external-tick design.

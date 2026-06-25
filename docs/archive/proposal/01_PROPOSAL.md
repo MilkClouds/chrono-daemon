@@ -87,12 +87,12 @@ runlet의 niche는 "pure Python + anyio + SimClock burst replay first-class + 4 
 
 | Use case | runlet 매핑 |
 |----------|------------|
-| **System 2/1/0 inference pipeline** | `S2Loop`/`S1Loop`/`S0Loop` = `Daemon` 3개, per-session `TimeServer` = `Clock` 인스턴스, 각 stage 간 데이터 흐름 = `Channel`, `HarnessDispatcher.register/unregister` = `Supervisor` add/cooperative stop. `examples/reflex_dual_mock.py` 및 `examples/reflex_dual_multi_session.py`에서 실제 mock 구현. |
+| **System 2/1/0 inference pipeline** | `S2Loop`/`S1Loop`/`S0Loop` = `Daemon` 3개, per-session clock = `Clock` 인스턴스, 각 stage 간 데이터 흐름 = `Channel`, session `register/unregister` = `Supervisor` add/cooperative stop. `examples/system_stack_mock.py` 및 `examples/system_stack_multi_session.py`에서 실제 mock 구현. |
 | **Eval rollout workers** | 각 worker = `Daemon`, per-session `SimClock`으로 결정론적 replay, 결과 수집 = `Channel`. |
 | **Agent orchestration** | Planner/executor/tool = `Daemon`, 메시지 흐름 = `Channel`, 외부 sync ABC와의 bridge = `recipes.sync_bridge.host_async_dispatcher`. |
 | **Multi-rate reactive control** | 각 rate loop = `Daemon` with `ctx.clock.every(period)`, shared state = `recipes.latest.Latest[T]` cache, command stream = `Channel`. |
 
-`examples/`의 두 mock pipeline은 ergonomic post-mortem까지 함께 제공한다. 어디가 깔끔했고, 어디가 boilerplate였고, 어디서 v0가 부족한지를 [docs/archive/reflex-dual-postmortem.md](../reflex-dual-postmortem.md)에 정리했다.
+`examples/`의 두 mock pipeline은 ergonomic post-mortem까지 함께 제공한다. 어디가 깔끔했고, 어디가 boilerplate였고, 어디서 v0가 부족한지를 [docs/archive/system-stack-postmortem.md](../system-stack-postmortem.md)에 정리했다.
 
 ## Supported Backends
 

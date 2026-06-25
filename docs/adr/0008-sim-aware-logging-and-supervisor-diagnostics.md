@@ -6,7 +6,7 @@ Status: Accepted (2026-05-18); amended (2026-06-25)
 
 The initial four-primitive core (`Channel`, `Clock`, `Daemon`, `Supervisor`)
 shipped the minimum surface required to run a deterministic burst-replay
-scenario. Building the `examples/reflex_dual_mock.py` pipeline and
+scenario. Building the `examples/system_stack_mock.py` pipeline and
 re-reading the API surface against ROS2, dora-rs, and Apollo CyberRT surfaced
 four small but non-deferable gaps. Each is a diagnostic hole that makes the
 library's headline
@@ -108,5 +108,5 @@ Four targeted additions, each ~10-30 LOC:
   is how the daemon's identity survives that path.
 - ADR 0006: `ChannelStats` is part of the transport-agnostic Protocol
   surface; future transports must implement `statistics()`.
-- `docs/archive/reflex-dual-postmortem.md`: the postmortem that surfaced
+- `docs/archive/system-stack-postmortem.md`: the postmortem that surfaced
   these four gaps.

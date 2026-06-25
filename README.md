@@ -79,9 +79,9 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
   select, sync↔async bridge. Source in `src/runlet/recipes/`.
 - [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.
-- [`examples/reflex_dual_mock.py`](examples/reflex_dual_mock.py): full
+- [`examples/system_stack_mock.py`](examples/system_stack_mock.py): full
   multi-rate System 2/1/0 mock pipeline, with an ergonomics post-mortem in
-  [`docs/archive/reflex-dual-postmortem.md`](docs/archive/reflex-dual-postmortem.md).
+  [`docs/archive/system-stack-postmortem.md`](docs/archive/system-stack-postmortem.md).
 
 ## Status
 

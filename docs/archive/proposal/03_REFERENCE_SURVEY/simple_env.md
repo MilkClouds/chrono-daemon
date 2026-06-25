@@ -88,7 +88,7 @@ simple_env는 **runlet의 의도된 evolution path**다. 다음 순서:
 
 runlet v0의 integration test (`test_three_daemon_pipeline_under_simclock`)는 명시적으로 "would runlet replace simple_env" 시나리오를 cover한다 — sensor → controller → motor 파이프라인을 SimClock burst로 replay.
 
-simple_env는 GitHub에서 거의 비공개 prototype 형태로 머물러 있어 외부 채택 사례는 없다. runlet은 그 prototype을 외부 사용 가능한 라이브러리로 일반화한 것이며, 본 프로젝트 (reflex repo)의 evaluation harness, inference dispatcher, agent orchestration 등에 backbone으로 활용될 예정.
+simple_env는 GitHub에서 거의 비공개 prototype 형태로 머물러 있어 외부 채택 사례는 없다. runlet은 그 prototype을 외부 사용 가능한 라이브러리로 일반화한 것이다.
 
 ## Links
 

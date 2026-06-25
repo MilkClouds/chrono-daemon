@@ -1,11 +1,11 @@
-"""reflex-dual mock: multi-session dispatcher via nested Supervisors.
+"""system-stack mock: multi-session dispatcher via nested Supervisors.
 
-Extends ``reflex_dual_mock`` to the N-concurrent-sessions shape used by a
+Extends ``system_stack_mock`` to the N-concurrent-sessions shape used by a
 dispatcher-backed inference service. The structure:
 
 - The outer :class:`Supervisor` hosts a :class:`MockDispatcher` that
   exposes ``register(sid, duration_s)`` and ``unregister(sid)``. These are the
-  per-session counterparts of the production dispatcher's surface.
+  per-session lifecycle operations exposed to the outer application.
 - Each registered session runs in an *inner* :class:`Supervisor` (with its
   own :class:`SimClock`) spawned as one daemon on the outer one. The
   inner supervisor owns the per-session S2/S1/S0/actuator daemons and the
@@ -15,9 +15,9 @@ dispatcher-backed inference service. The structure:
   ``inner.stop(grace=0)``, and returns. The outer supervisor's
   ``_on_daemon_exit`` then forgets the session.
 
-This mirrors production's per-session ``S{N}Loop`` + ``TimeServerRegistry``
-without adding any new primitives to runlet: the supervisor primitive
-composes recursively, and ``anyio.Event`` carries the cancel signal.
+This mirrors a per-session ``S{N}`` loop set plus per-session clock ownership
+without adding any new primitives to runlet: the supervisor primitive composes
+recursively, and ``anyio.Event`` carries the cancel signal.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ from pathlib import Path
 
 import anyio
 
-# Allow `python examples/reflex_dual_multi_session.py` to import the sibling
+# Allow `python examples/system_stack_multi_session.py` to import the sibling
 # single-session module without needing `examples/` to be a package.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from reflex_dual_mock import (  # noqa: E402
+from system_stack_mock import (  # noqa: E402
     OBS_RATE_HZ,
     Action,
     Chunk,
@@ -96,11 +96,10 @@ async def session_runner(
 class MockDispatcher:
     """Outer-side handle exposing register/unregister over a Supervisor.
 
-    Roughly the runlet analogue of a production dispatcher surface, limited to
-    the parts that matter for lifecycle. ``push_obs``/``tick`` are absent
-    because under runlet each session's inner SimClock and obs cache are driven
-    inside ``session_runner``; production can replace those by routing harness
-    calls through this object.
+    A small dispatcher surface limited to the parts that matter for lifecycle.
+    ``push_obs``/``tick`` are absent because under runlet each session's inner
+    SimClock and obs cache are driven inside ``session_runner``; a downstream
+    application can replace those by routing harness calls through this object.
     """
 
     def __init__(self, sup: Supervisor) -> None:
@@ -133,7 +132,7 @@ async def run_multi_session(sessions: dict[str, float]) -> dict[str, SessionLog]
     Each session runs to its own configured ``duration_s`` and then exits
     naturally; the outer Supervisor blocks on ``__aexit__`` until they all
     do. See :func:`run_with_early_unregister` for the dynamic-unregister
-    shape that mirrors a production episode-end call.
+    shape that mirrors an external episode-end call.
     """
     async with Supervisor() as outer:
         d = MockDispatcher(outer)

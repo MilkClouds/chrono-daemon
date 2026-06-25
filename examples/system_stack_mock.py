@@ -1,6 +1,6 @@
-"""reflex-dual mock pipeline: System 2 / 1 / 0 inference with mocked models.
+"""System 2 / 1 / 0 mock pipeline with deterministic model stubs.
 
-This is a production-inspired three-rate inference pipeline. Each
+This is an application-style three-rate inference pipeline. Each
 ``S{N}Service`` call is replaced by ``await ctx.clock.sleep(latency)`` plus
 a deterministic toy computation, so the entire scenario runs in ~0
 wall-clock time under ``SimClock``.
@@ -10,11 +10,11 @@ default scheduler randomizes task-spawn order across runs, so cross-run logs
 on trio agree in length, in monotone time, and in distribution, but not
 bit-for-bit. See ``examples/README.md`` for the discussion.
 
-In the production shape this models, observations are pushed into the
-dispatcher from outside. This mock follows the same shape: the supervisor's
-main task plays the harness role, writes the latest obs into ``obs_cache``,
-and advances the SimClock between writes. There is no in-pipeline ``sensor``
-daemon; obs is an external input.
+In the service shape this models, observations are pushed into the dispatcher
+from outside. This mock follows the same shape: the supervisor's main task
+plays the harness role, writes the latest obs into ``obs_cache``, and advances
+the SimClock between writes. There is no in-pipeline ``sensor`` daemon; obs is
+an external input.
 
 Pipeline layout (rates are virtual under ``SimClock``; numbers below mirror
 the rates of a typical slow-planner / fast-policy / high-rate-actuator stack):
@@ -85,7 +85,7 @@ class Action:
 
 # --- rates and mock latencies ---------------------------------------------
 
-# Rates mirror a representative production inference stack:
+# Rates mirror a representative hierarchical inference stack:
 #   - S2 fires at 1 Hz (period_ms: 1000)
 #   - S1 fires at 10 Hz (period_ms: 100)
 #   - S0 dispenses at the robot control rate (~20 Hz)
@@ -103,7 +103,7 @@ S1_LATENCY = 0.02
 
 # --- daemons ---------------------------------------------------------------
 # Note: no sensor daemon. Obs is pushed by the harness (the supervisor's
-# main task in run_mock, mirroring vla_eval's on_observation callback).
+# main task in run_mock, mirroring an external observation callback).
 
 
 @daemon
