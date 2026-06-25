@@ -1,5 +1,9 @@
 # runlet
 
+[![CI](https://github.com/MilkClouds/runlet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MilkClouds/runlet/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 runlet is a small Python library for long-running async components whose time
 can be replayed deterministically. It wraps
 [anyio](https://anyio.readthedocs.io/) with four primitives:
