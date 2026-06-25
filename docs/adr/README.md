@@ -30,3 +30,4 @@ number: `000N-short-summary.md`.
 - [0007 — `anyio` is the only runtime dependency](0007-anyio-only-runtime-dependency.md)
 - [0008 — Sim-time-aware logging and supervisor diagnostics](0008-sim-aware-logging-and-supervisor-diagnostics.md)
 - [0009 — Cooperative stop signaling on Supervisor](0009-cooperative-stop-signaling.md)
+- [0010 — Channel endpoints are single-owner](0010-channel-endpoints-are-single-owner.md)

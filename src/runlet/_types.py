@@ -6,6 +6,7 @@ from typing import Literal
 
 __all__ = [
     "ChannelClosed",
+    "ChannelInUse",
     "DaemonError",
     "EndOfStream",
     "OnError",
@@ -24,6 +25,16 @@ class ChannelClosed(Exception):
     """Raised by `SendStream.send()` after the receive side has been closed.
 
     The send-side has nowhere to deliver, so the call cannot make progress.
+    """
+
+
+class ChannelInUse(Exception):
+    """Raised when a channel endpoint is used concurrently.
+
+    runlet channels are intended as single-producer / single-consumer wiring.
+    Passing the same endpoint to multiple active daemons is almost always a
+    wiring mistake; the in-process implementation catches concurrent blocking
+    ``send`` / ``receive`` calls and fails fast with this exception.
     """
 
 

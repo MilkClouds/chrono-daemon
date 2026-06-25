@@ -4,6 +4,10 @@ ADR 0001 keeps the comm primitive at 1:1 ``Channel``, with no service / RPC
 construct. Request/response is reconstructed by embedding the *reply
 channel* in the request: the caller opens a single-slot reply channel,
 sends ``(request, reply)`` to the batcher, then awaits on its reply channel.
+Because core channel endpoints are single-owner (ADR 0010), this recipe's
+``submit`` helper implements deliberate fan-in with ``send_nowait`` plus
+checkpoints rather than relying on multiple callers sharing blocking
+``send()``.
 
 This is the pattern behind every dynamic-batching inference server (e.g.
 worv-ai/reflex PR #191's ``DynamicBatcher``): N independent callers each
@@ -206,7 +210,13 @@ async def submit(
     Raises whatever ``forward`` raised, if it raised for this batch.
     """
     reply: Channel[Resp | Exception] = open_channel(maxsize=1)
-    await out.send(Pending(req=req, reply=reply))
+    pending = Pending(req=req, reply=reply)
+    while True:
+        try:
+            out.send_nowait(pending)
+            break
+        except WouldBlock:
+            await anyio.lowlevel.checkpoint()
     result = await reply.recv.receive()
     if isinstance(result, Exception):
         raise result

@@ -1,6 +1,6 @@
 # ADR 0001 — Channel is the sole communication primitive
 
-Status: Accepted (2026-05-18)
+Status: Accepted (2026-05-18); superseded in part by ADR 0010
 
 ## Context
 

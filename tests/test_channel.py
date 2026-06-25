@@ -1,11 +1,11 @@
-"""Channel behavior: bounded send/recv, competing consumers, close propagation, async-iter."""
+"""Channel behavior: bounded SPSC send/recv, close propagation, async-iter."""
 
 from __future__ import annotations
 
 import anyio
 import pytest
 
-from runlet import Channel, ChannelClosed, EndOfStream, WouldBlock, open_channel
+from runlet import Channel, ChannelClosed, ChannelInUse, EndOfStream, WouldBlock, open_channel
 
 pytestmark = pytest.mark.anyio
 
@@ -18,13 +18,13 @@ async def test_send_receive_roundtrip() -> None:
 
 async def test_bounded_buffer_blocks_when_full() -> None:
     ch = open_channel(maxsize=2)
-    await ch.send.send(1)
-    await ch.send.send(2)
 
     sent_third = False
 
     async def sender() -> None:
         nonlocal sent_third
+        await ch.send.send(1)
+        await ch.send.send(2)
         await ch.send.send(3)
         sent_third = True
 
@@ -105,35 +105,45 @@ async def test_statistics_reports_buffer_state() -> None:
     assert s2.max_buffer_size in (0, math.inf, 0.0)
 
 
-async def test_competing_consumers_share_items() -> None:
-    """The MPMC semantic: each item is delivered to exactly one waiting consumer."""
+async def test_concurrent_receivers_raise_channel_in_use() -> None:
+    """Channel endpoints are single-owner; concurrent receive is a wiring error."""
     ch: Channel[int] = open_channel(maxsize=0)
+    receiver_waiting = anyio.Event()
 
-    received_by_a: list[int] = []
-    received_by_b: list[int] = []
-
-    async def producer() -> None:
-        for i in range(20):
-            await ch.send.send(i)
-        await ch.send.aclose()
-
-    async def consumer(bucket: list[int]) -> None:
+    async def blocked_consumer() -> None:
         try:
-            while True:
-                bucket.append(await ch.recv.receive())
+            receiver_waiting.set()
+            await ch.recv.receive()
         except EndOfStream:
             return
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(producer)
-        tg.start_soon(consumer, received_by_a)
-        tg.start_soon(consumer, received_by_b)
+        tg.start_soon(blocked_consumer)
+        await receiver_waiting.wait()
+        await anyio.sleep(0)
+        with pytest.raises(ChannelInUse):
+            await ch.recv.receive()
+        await ch.send.aclose()
 
-    # Both consumers got non-zero shares, union equals the full set, no duplicates.
-    assert len(received_by_a) > 0
-    assert len(received_by_b) > 0
-    assert sorted(received_by_a + received_by_b) == list(range(20))
-    assert len(set(received_by_a) & set(received_by_b)) == 0
+
+async def test_concurrent_senders_raise_channel_in_use() -> None:
+    """Channel endpoints are single-owner; concurrent send is a wiring error."""
+    ch: Channel[int] = open_channel(maxsize=1)
+    sender_waiting = anyio.Event()
+
+    async def blocked_sender() -> None:
+        await ch.send.send(1)
+        sender_waiting.set()
+        await ch.send.send(2)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(blocked_sender)
+        await sender_waiting.wait()
+        await anyio.sleep(0)
+        with pytest.raises(ChannelInUse):
+            await ch.send.send(3)
+        assert await ch.recv.receive() == 1
+        assert await ch.recv.receive() == 2
 
 
 # -- send_nowait / receive_nowait ---------------------------------------------

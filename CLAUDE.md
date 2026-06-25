@@ -27,9 +27,10 @@ ADR first.
   Don't add `Topic`, pub/sub broadcast, services, RPC, or a parameter
   system to `runlet.*`. Fanout lives at `runlet.recipes.fanout.tee` —
   importable, but under the weaker-stability recipes namespace. (ADR 0001.)
-- **Daemons must reach for `ctx.clock.sleep(...)`** — never `anyio.sleep`
-  directly. Library-internal code must obey this so `SimClock` can
-  intercept. (ADR 0002.)
+- **Daemons must reach for `ctx.clock.sleep(...)` or
+  `ctx.clock.wait_until(...)`** — never `anyio.sleep` directly.
+  Library-internal code must obey this so `SimClock` can intercept.
+  (ADR 0002.)
 - **`Daemon` has exactly three hooks**: `on_start`, `run`, `on_stop`. No
   pause/resume, no lifecycle state machine. (ADR 0005.)
 - **`Channel` protocol signatures stay transport-agnostic.** Don't bake

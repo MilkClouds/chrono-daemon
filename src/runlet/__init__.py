@@ -3,7 +3,7 @@
 Public surface:
 
 - :class:`Channel`, :class:`SendStream`, :class:`ReceiveStream`, :func:`open_channel`,
-  :exc:`EndOfStream`, :exc:`ChannelClosed`
+  :exc:`EndOfStream`, :exc:`ChannelClosed`, :exc:`ChannelInUse`
 - :class:`Clock`, :class:`WallClock`, :class:`SimClock`
 - :class:`Context`
 - :class:`Daemon`, :func:`daemon`
@@ -12,7 +12,7 @@ Public surface:
 
 from __future__ import annotations
 
-from runlet._types import ChannelClosed, DaemonError, EndOfStream, OnError, WouldBlock
+from runlet._types import ChannelClosed, ChannelInUse, DaemonError, EndOfStream, OnError, WouldBlock
 from runlet.channel import Channel, ChannelStats, ReceiveStream, SendStream, open_channel
 from runlet.clock import Clock, SimClock, WallClock
 from runlet.context import Context
@@ -24,6 +24,7 @@ __version__ = "0.1.0"
 __all__ = [
     "Channel",
     "ChannelClosed",
+    "ChannelInUse",
     "ChannelStats",
     "Clock",
     "Context",

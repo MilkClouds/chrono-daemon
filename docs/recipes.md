@@ -37,7 +37,9 @@ The stability contract is restated at the top of
   (raced against `incoming.receive` via `ctx.clock.sleep`, *not*
   `anyio.move_on_after` — that one is wall-clock-only and would silently
   misbehave under `SimClock`). On `forward` exceptions, every caller in
-  the batch sees the same exception (no silent partial failure).
+  the batch sees the same exception (no silent partial failure). This is
+  deliberate fan-in on top of SPSC core channels, so callers should use
+  `submit()` rather than sharing blocking `send()` directly.
 - **`runlet.recipes.cooperative_every.cooperative_every(ctx, period)`** —
   [`cooperative_every.py`](../src/runlet/recipes/cooperative_every.py).
   Stop-aware periodic iteration: like `ctx.clock.every(period)`, but exits

@@ -1,6 +1,6 @@
 """Recipe: 1:N broadcast via an explicit ``tee`` daemon.
 
-ADR 0001 keeps ``Channel`` 1:1 (competing consumers). When a single source
+ADR 0001 keeps ``Channel`` 1:1 and ADR 0010 makes endpoints single-owner. When a single source
 must reach N independent consumers — each with its own backpressure and its
 own close lifecycle — wire it as one producer, one ``tee`` daemon, and N
 destination channels.

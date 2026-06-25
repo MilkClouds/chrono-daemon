@@ -22,11 +22,13 @@ enough.
 
 ## Decision
 
-Time is reached through a `Clock` protocol with three methods: `now() -> float`,
-`async sleep(seconds)`, and `every(period) -> AsyncIterator[float]`. Two
+Time is reached through a `Clock` protocol with four methods: `now() -> float`,
+`async sleep(seconds)`, `async wait_until(deadline)`, and
+`every(period) -> AsyncIterator[float]`. Two
 implementations are provided:
 
-- `WallClock` delegates to `anyio.current_time` and `anyio.sleep`.
+- `WallClock` uses `time.monotonic()` for `now()` and delegates sleeps to
+  `anyio.sleep`.
 - `SimClock` keeps an internal heap of `(deadline, sequence, anyio.Event)`
   tuples. `sleep` enqueues; `advance(dt)` walks the heap in deadline order,
   setting each event and yielding to let the woken task register a
@@ -36,10 +38,12 @@ implementations are provided:
 "daemons must use `ctx.clock.sleep`, never `anyio.sleep`" is the convention
 that makes the interception complete; it is enforced socially, not by code.
 
-`SimClock.advance_to` performs `_SETTLE_ROUNDS` (currently 8) checkpoint
-yields between successive wakes. This is empirically required on the trio
-backend, which does not necessarily resume a woken task on a single
-fairness round.
+`SimClock.advance_to` performs a configurable `settle_rounds` checkpoint
+budget between successive wakes. The default is 8. This is empirically
+required on the trio backend, which does not necessarily resume a woken
+task on a single fairness round. anyio does not expose a backend-agnostic
+"run until all tasks are idle" primitive, so the budget is explicit rather
+than inferred.
 
 ## Consequences
 
@@ -53,10 +57,9 @@ fairness round.
   enforced by the type system. A daemon that imports `anyio.sleep` directly
   silently breaks `SimClock`. The test suite has integration tests that would
   detect it for in-tree code; user code is on the honor system.
-- `_SETTLE_ROUNDS` is a magic number with a backend-specific justification.
-  Raising or lowering it across backends would require trio-internal
-  knowledge; the chosen value is generous to avoid flakes at the cost of a
-  fixed yield budget per wake.
+- `settle_rounds` is still a scheduler-settlement budget, not a proof of
+  global quiescence. Raising or lowering it changes how much downstream task
+  chaining one `advance_to()` call will absorb before finalizing.
 - Backend-agnostic deterministic primitives are an ongoing area of churn
   in the anyio ecosystem; if a future anyio version ships an equivalent,
   `SimClock` will likely be re-implemented on top of it rather than

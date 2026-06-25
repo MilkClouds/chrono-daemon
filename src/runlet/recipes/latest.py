@@ -7,7 +7,7 @@ case (CPython attribute reads/writes are atomic).
 
 Used in both reflex-dual examples to share the latest ``Obs`` / ``Subgoal``
 across S2/S1/S0 daemons without a broadcast channel (ADR 0001 keeps the
-core comm primitive at 1:1).
+core comm primitive at 1:1; ADR 0010 makes endpoints single-owner).
 
 Import as ``from runlet.recipes.latest import Latest``. The recipe
 namespace (``runlet.recipes``) is best-effort — see

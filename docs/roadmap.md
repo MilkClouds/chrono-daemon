@@ -28,10 +28,10 @@ ship.
 
 ## Maybe — not committed
 
-- **`Channel` sender clone** for proper fan-in where each producer can close
-  its own send-side independently. anyio's `MemoryObjectSendStream` already
-  supports `.clone()`; surfacing it is a one-method change but commits us
-  to a fan-in semantic across all future transports.
+- **Deliberate fan-in / worker-pool recipe.** Core channels are SPSC
+  (ADR 0010). If users need competing consumers or multiple producers, that
+  should arrive as an explicit recipe or factory with a clear close/error
+  policy, not by making endpoint sharing accidental.
 - **`select(*receivers)` as a first-class API** instead of a recipe.
   Requires deciding on a cancellation semantic for the losers.
 - **Strict-rate `every(mode="strict")`.** Today's `every` skips ticks when

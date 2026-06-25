@@ -1,10 +1,10 @@
-"""Typed point-to-point channel — the sole communication primitive.
+"""Typed single-producer / single-consumer channel — the sole communication primitive.
 
-A ``Channel[T]`` is a bounded queue with two endpoints, ``send`` and ``recv``. Multiple
-producers and multiple consumers may share the endpoints; each item is delivered to
-**exactly one** waiting receiver (competing-consumers semantic). This is the only
-messaging primitive: fanout / pub-sub is intentionally absent. If a user needs to
-broadcast a single source to N consumers, they write an explicit ``tee`` themselves.
+A ``Channel[T]`` is a bounded queue with two endpoints, ``send`` and ``recv``. The
+intended shape is exactly one producer task owning ``send`` and exactly one consumer
+task owning ``recv``. This is the only messaging primitive: fanout / pub-sub is
+intentionally absent. If a user needs to broadcast a single source to N consumers,
+they write an explicit ``tee`` themselves.
 
 Closing the send side propagates ``EndOfStream`` to all waiting receivers.
 
@@ -21,7 +21,7 @@ from typing import Generic, Protocol, TypeVar
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
-from runlet._types import ChannelClosed, EndOfStream, WouldBlock
+from runlet._types import ChannelClosed, ChannelInUse, EndOfStream, WouldBlock
 
 __all__ = ["Channel", "ChannelStats", "ReceiveStream", "SendStream", "open_channel"]
 
@@ -59,7 +59,7 @@ class ChannelStats:
 
 
 class SendStream(Protocol[T]):
-    """Sender side of a channel. Multiple producers may share one ``SendStream``."""
+    """Sender side of a channel. Intended to be owned by one active producer."""
 
     async def send(self, item: T) -> None:
         """Send an item. Blocks (under the channel's backpressure) until a slot is free.
@@ -88,7 +88,7 @@ class SendStream(Protocol[T]):
 
 
 class ReceiveStream(Protocol[T]):
-    """Receiver side of a channel. Multiple consumers may share one ``ReceiveStream`` and will compete."""
+    """Receiver side of a channel. Intended to be owned by one active consumer."""
 
     async def receive(self) -> T:
         """Receive one item. Blocks until an item is available.
@@ -148,14 +148,20 @@ class _Send(Generic[T]):
 
     def __init__(self, inner: MemoryObjectSendStream[T]) -> None:
         self._inner = inner
+        self._busy = False
 
     async def send(self, item: T) -> None:
+        if self._busy:
+            raise ChannelInUse("send endpoint already has an active sender")
+        self._busy = True
         try:
             await self._inner.send(item)
         except anyio.BrokenResourceError as e:
             raise ChannelClosed("receive side closed") from e
         except anyio.ClosedResourceError as e:
             raise ChannelClosed("send side already closed") from e
+        finally:
+            self._busy = False
 
     def send_nowait(self, item: T) -> None:
         try:
@@ -179,14 +185,20 @@ class _Recv(Generic[T]):
 
     def __init__(self, inner: MemoryObjectReceiveStream[T]) -> None:
         self._inner = inner
+        self._busy = False
 
     async def receive(self) -> T:
+        if self._busy:
+            raise ChannelInUse("receive endpoint already has an active receiver")
+        self._busy = True
         try:
             return await self._inner.receive()
         except anyio.EndOfStream as e:
             raise EndOfStream from e
         except anyio.ClosedResourceError as e:
             raise EndOfStream from e
+        finally:
+            self._busy = False
 
     def receive_nowait(self) -> T:
         try:
@@ -231,9 +243,10 @@ def open_channel(maxsize: int = 0) -> Channel[T]:
 
     Notes
     -----
-    Multiple receivers calling ``recv.receive()`` will compete for items
-    (one item → one consumer). This is the intended MPMC semantic. There is no
-    broadcast / fanout — keep the wiring explicit.
+    The intended ownership model is single producer / single consumer. Sharing
+    an endpoint between concurrently active daemons raises ``ChannelInUse`` for
+    blocking ``send`` / ``receive`` calls. There is no broadcast / fanout —
+    keep the wiring explicit.
     """
     send_inner, recv_inner = anyio.create_memory_object_stream[T](max_buffer_size=maxsize)
     return Channel(send=_Send(send_inner), recv=_Recv(recv_inner))

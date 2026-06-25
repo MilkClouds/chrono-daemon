@@ -3,7 +3,7 @@
 The ``Clock`` protocol is the only async-time interface daemons should touch. Calling
 ``anyio.sleep`` directly bypasses ``SimClock``, which would silently break burst-step
 replay determinism — so the rule (enforced by convention) is: always reach for
-``ctx.clock.sleep(...)``.
+``ctx.clock.sleep(...)`` or ``ctx.clock.wait_until(...)``.
 
 ``SimClock`` lets a driver task advance virtual time in bulk via ``await clock.advance(dt)``.
 Sleepers register a deadline; ``advance_to`` walks the heap, sets each woken sleeper's
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -24,14 +25,12 @@ import anyio.lowlevel
 
 __all__ = ["Clock", "SimClock", "WallClock"]
 
-# Number of checkpoints yielded between heap inspections to let woken tasks
-# resume *and* let chained downstream tasks progress (wake → send → consumer
-# receives → consumer registers next sleep → ...). The right floor depends on
-# both backend scheduling fairness (trio randomizes spawn order) and pipeline
-# depth (a 3-stage chain needs ~3 checkpoints to drain to the next sleep). 8
-# is the empirically validated worst case across the test suite; lowering it
-# without a model of pipeline depth breaks the integration tests silently.
-_SETTLE_ROUNDS = 8
+# Default number of checkpoints yielded between heap inspections to let woken
+# tasks resume and register follow-up sleeps. anyio does not expose a portable
+# "run until all tasks are idle" primitive, so SimClock makes this settlement
+# budget explicit and configurable instead of pretending it can infer global
+# quiescence.
+_DEFAULT_SETTLE_ROUNDS = 8
 
 
 class Clock(Protocol):
@@ -43,6 +42,10 @@ class Clock(Protocol):
 
     async def sleep(self, seconds: float) -> None:
         """Sleep for ``seconds`` of clock-time. Non-positive values yield once and return."""
+        ...
+
+    async def wait_until(self, deadline: float) -> None:
+        """Sleep until absolute clock-time ``deadline``. Past deadlines yield once and return."""
         ...
 
     def every(self, period: float) -> AsyncIterator[float]:
@@ -58,13 +61,16 @@ class WallClock:
     """Real-time clock delegating to anyio's monotonic clock and sleep."""
 
     def now(self) -> float:
-        return anyio.current_time()
+        return time.monotonic()
 
     async def sleep(self, seconds: float) -> None:
         if seconds <= 0:
             await anyio.lowlevel.checkpoint()
             return
         await anyio.sleep(seconds)
+
+    async def wait_until(self, deadline: float) -> None:
+        await self.sleep(deadline - self.now())
 
     async def every(self, period: float) -> AsyncIterator[float]:
         if period <= 0:
@@ -122,8 +128,11 @@ class SimClock:
     ...     assert log == [("worker", 1.0)]
     """
 
-    def __init__(self, t0: float = 0.0) -> None:
+    def __init__(self, t0: float = 0.0, *, settle_rounds: int = _DEFAULT_SETTLE_ROUNDS) -> None:
+        if settle_rounds < 1:
+            raise ValueError(f"settle_rounds must be >= 1, got {settle_rounds}")
         self._t = float(t0)
+        self._settle_rounds = settle_rounds
         # Min-heap of pending sleepers ordered by (deadline, seq). seq breaks
         # ties stably. Cancelled entries stay in the heap with cancelled=True
         # and are skipped on pop.
@@ -138,7 +147,14 @@ class SimClock:
         await anyio.lowlevel.checkpoint()
         if seconds <= 0:
             return
-        waiter = _Waiter(deadline=self._t + seconds, seq=next(self._seq), event=anyio.Event())
+        await self.wait_until(self._t + seconds)
+
+    async def wait_until(self, deadline: float) -> None:
+        # Checkpoint first so a freshly-cancelled caller exits before enqueueing.
+        await anyio.lowlevel.checkpoint()
+        if deadline <= self._t:
+            return
+        waiter = _Waiter(deadline=deadline, seq=next(self._seq), event=anyio.Event())
         heapq.heappush(self._waiters, waiter)
         try:
             await waiter.event.wait()
@@ -164,7 +180,7 @@ class SimClock:
         """Advance virtual time to absolute ``t``. Idempotent for already-past values.
 
         Wakes sleepers one at a time in (deadline, insertion-order) order. After
-        each wake we yield ``_SETTLE_ROUNDS`` checkpoints so the woken task can
+        each wake we yield ``settle_rounds`` checkpoints so the woken task can
         run, send/receive through downstream channels, and possibly register a
         follow-up sleep before the next heap inspection. When the heap settles
         with nothing due by ``t``, we yield the same budget once more and
@@ -184,7 +200,7 @@ class SimClock:
                 continue
             self._t = waiter.deadline
             waiter.event.set()
-            for _ in range(_SETTLE_ROUNDS):
+            for _ in range(self._settle_rounds):
                 await anyio.lowlevel.checkpoint()
         self._t = max(self._t, t)
 
@@ -194,12 +210,12 @@ class SimClock:
             heapq.heappop(self._waiters)
 
     async def _poll_for_inrange(self, t: float) -> bool:
-        """Yield ``_SETTLE_ROUNDS`` checkpoints and report whether a new
+        """Yield ``settle_rounds`` checkpoints and report whether a new
         in-range sleeper appeared during the settle. The full budget is
         required: a shorter poll races against in-flight task chains that
         register their follow-up sleeps several checkpoints after waking.
         """
-        for _ in range(_SETTLE_ROUNDS):
+        for _ in range(self._settle_rounds):
             await anyio.lowlevel.checkpoint()
         self._drop_cancelled_tops()
         return bool(self._waiters) and self._waiters[0].deadline <= t
@@ -211,7 +227,7 @@ class SimClock:
         while True:
             delta = next_t - self._t
             if delta > 0:
-                await self.sleep(delta)
+                await self.wait_until(next_t)
             yield next_t
             # Maintain a monotonic-target schedule (the Clock protocol contract):
             # if virtual time has already passed beyond the next target — e.g.

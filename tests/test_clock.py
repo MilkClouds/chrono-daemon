@@ -17,6 +17,11 @@ pytestmark = pytest.mark.anyio
 # -- WallClock -----------------------------------------------------------------
 
 
+def test_wallclock_now_is_sync_safe() -> None:
+    clock = WallClock()
+    assert isinstance(clock.now(), float)
+
+
 async def test_wallclock_now_is_monotonic() -> None:
     clock = WallClock()
     t0 = clock.now()
@@ -31,6 +36,11 @@ async def test_wallclock_sleep_zero_is_a_checkpoint() -> None:
     # Should return promptly without raising.
     await clock.sleep(0)
     await clock.sleep(-1)
+
+
+async def test_wallclock_wait_until_past_deadline_is_a_checkpoint() -> None:
+    clock = WallClock()
+    await clock.wait_until(clock.now() - 1.0)
 
 
 # -- SimClock ------------------------------------------------------------------
@@ -106,6 +116,29 @@ async def test_simclock_advance_to_idempotent_past() -> None:
     clock = SimClock(t0=5.0)
     await clock.advance_to(3.0)  # should be no-op
     assert clock.now() == 5.0
+
+
+async def test_simclock_wait_until_absolute_deadline() -> None:
+    clock = SimClock(t0=10.0)
+    log: list[float] = []
+
+    async def worker() -> None:
+        await clock.wait_until(12.5)
+        log.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(worker)
+        await anyio.sleep(0)
+        await clock.advance_to(20.0)
+
+    assert log == [12.5]
+    assert clock.now() == 20.0
+
+
+async def test_simclock_wait_until_past_deadline_is_a_checkpoint() -> None:
+    clock = SimClock(t0=10.0)
+    await clock.wait_until(9.0)
+    assert clock.now() == 10.0
 
 
 async def test_simclock_advance_negative_raises() -> None:
@@ -245,7 +278,7 @@ async def test_simclock_mid_heap_cancellation_cleared_by_advance() -> None:
 
 async def test_simclock_advance_breaks_early_when_no_followup_sleep() -> None:
     """The empty-heap polling path breaks as soon as a new in-range sleeper
-    appears, instead of always burning the full ``_SETTLE_ROUNDS`` budget.
+    appears, instead of always burning the full ``settle_rounds`` budget.
 
     We rely on a black-box check: that the canary determinism holds even when
     a woken task does not register a follow-up sleep. (Performance is exercised

@@ -35,8 +35,8 @@
 
 | Primitive | 역할 |
 |-----------|------|
-| **`Channel[T]`** | 유일한 inter-daemon 통신 primitive. MPMC bounded queue. 여러 consumer가 공유하면 competing-consumers 의미로 동작한다. |
-| **`Clock`** | `WallClock` (production, `anyio.current_time/sleep` 위임)과 `SimClock` (deterministic, `advance(dt)`/`advance_to(t)`로 시간을 일괄 진행). |
+| **`Channel[T]`** | 유일한 inter-daemon 통신 primitive. SPSC bounded queue. 여러 producer/consumer가 필요하면 recipe로 명시적으로 표현한다. |
+| **`Clock`** | `WallClock` (production, monotonic real time)과 `SimClock` (deterministic, `advance(dt)`/`advance_to(t)`로 시간을 일괄 진행). |
 | **`Daemon`** | Long-running async unit. `on_start` / `run` / `on_stop` lifecycle hook. class 형태 또는 `@daemon` decorator. |
 | **`Supervisor`** | `async with Supervisor(...) as sup:` 구조적 동시성 root. `add(daemon)` / `spawn(fn)` / `signal_stop()` / `await stop(grace=...)` 으로 lifecycle 관리. 에러 정책: `shutdown` (default) / `restart` / `ignore`. |
 

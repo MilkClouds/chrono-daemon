@@ -34,8 +34,8 @@ async def main() -> None:
 
 | | What it is |
 |---|---|
-| **`Channel[T]`** | typed bounded queue, MPMC competing consumers, the only inter-daemon communication primitive |
-| **`Clock`** | `WallClock` (anyio passthrough) or `SimClock` (deterministic, burst `advance(dt)`) |
+| **`Channel[T]`** | typed bounded SPSC queue, the only inter-daemon communication primitive |
+| **`Clock`** | `WallClock` (real time) or `SimClock` (deterministic, burst `advance(dt)` / `advance_to(t)`) |
 | **`Daemon`** | long-running async unit; `on_start` / `run` / `on_stop` hooks. Use a subclass or the `@daemon` decorator |
 | **`Supervisor`** | `async with Supervisor(...)` structured-concurrency root; hosts daemons, dispatches errors (`shutdown` / `restart` / `ignore`) |
 

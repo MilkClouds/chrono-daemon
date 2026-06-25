@@ -8,27 +8,28 @@ from these four, with examples in `recipes/`.
 
 ### `Channel[T]`
 
-A typed bounded queue. Two endpoints, `send` and `recv`. Multiple producers
-and multiple consumers may share an endpoint; each item is delivered to
-**exactly one** waiting receiver (competing-consumers semantic). Closing the
-send side propagates `EndOfStream` to every receiver after the buffer drains.
+A typed bounded queue. Two endpoints, `send` and `recv`. The intended shape
+is single producer / single consumer: one daemon owns `send`, one daemon owns
+`recv`. Concurrent blocking use of the same endpoint is a wiring error and
+raises `ChannelInUse`. Closing the send side propagates `EndOfStream` to the
+receiver after the buffer drains.
 
 `Channel` is the only inter-daemon communication primitive in runlet. There
 is no `Topic`, no broadcast, no services, no RPC, no parameter system. The
-reasoning is in ADR 0001.
+reasoning is in ADR 0001 and the single-owner refinement is in ADR 0010.
 
 ### `Clock`
 
-A small protocol with `now()`, `async sleep(seconds)`, and `every(period)`.
-Two implementations ship:
+A small protocol with `now()`, `async sleep(seconds)`,
+`async wait_until(deadline)`, and `every(period)`. Two implementations ship:
 
-- `WallClock` delegates to `anyio.current_time` and `anyio.sleep`. Use it in
-  production.
+- `WallClock` uses `time.monotonic()` for `now()` and `anyio.sleep` for
+  sleeping. Use it in production.
 - `SimClock` is a deterministic virtual clock. Time only moves when a driver
   task calls `await clock.advance(dt)` (or `advance_to(t)`). Sleepers register
-  a deadline, the driver pops them in deadline order, and `_SETTLE_ROUNDS`
-  yields between wakes let woken tasks register follow-up sleeps before the
-  next iteration looks at the heap.
+  an absolute deadline, the driver pops them in deadline order, and the
+  configurable `settle_rounds` checkpoint budget between wakes lets woken
+  tasks register follow-up sleeps before the next heap inspection.
 
 Daemons must reach for `ctx.clock.sleep(...)` — never `anyio.sleep(...)`
 directly — or `SimClock` cannot intercept time. The reasoning is in ADR 0002.
@@ -114,6 +115,8 @@ bug, not a tuning knob:
   on wall-clock progress during the test.
 - `Channel.send.aclose()` causes every present and future `Channel.recv.receive()`
   to raise `EndOfStream` once the buffer drains, on both backends.
+- Concurrent blocking `send()` / `receive()` calls on the same channel endpoint
+  raise `ChannelInUse`; channels are SPSC by default.
 - A daemon's `cancel_scope` cancellation never affects sibling daemons.
 - `Supervisor.on_error="shutdown"` causes a failing daemon's exception to
   reach the `async with Supervisor` exit inside an `ExceptionGroup`, with the
