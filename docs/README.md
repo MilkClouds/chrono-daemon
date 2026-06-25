@@ -11,9 +11,11 @@ This directory holds runlet's design and usage docs.
   editing old ones; superseded ADRs link forward.
 - `recipes.md`: the user-facing index for patterns shipped under
   `runlet.recipes` (broadcast/fanout, batching, multi-channel select,
-  sync↔async bridging). The source lives in `src/runlet/recipes/`;
+  sync/async bridging). The source lives in `src/runlet/recipes/`;
   recipes are importable but carry weaker stability guarantees than the
   core surface.
+- Optional transport adapters live in `src/runlet/transports/`. The first
+  one is `runlet.transports.zmq`, covered by `concepts.md` and ADR 0011.
 - `roadmap.md`: what's planned next and what's deliberately deferred.
 - `archive/`: long-form proposal notes and postmortems. These are preserved
   for design history, not as the primary user documentation.
@@ -28,5 +30,5 @@ This directory holds runlet's design and usage docs.
 
 ## When not to write docs here
 
-- Editing rules for agents belong in `CLAUDE.md`.
+- Editing rules for agents belong outside the user-facing docs.
 - Per-PR justifications belong in the PR description.

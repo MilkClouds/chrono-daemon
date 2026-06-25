@@ -18,6 +18,6 @@ test:
 	uv run pytest tests/ -v
 
 install:
-	uv sync --dev
+	uv sync --dev --extra zmq
 
 all: format check test

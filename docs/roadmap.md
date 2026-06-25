@@ -10,13 +10,12 @@ items are added here when an ADR defers them.
   "byte equality across runs" form of replay determinism to asyncio. A
   shared `anyio.Event` set after all daemons register removes the
   ambiguity. Likely a recipe first. Surfaced by `examples/system_stack_mock.py`.
-- **Multi-process and network transports.** `Channel` is already a Protocol
-  (ADR 0006), so adapters such as `MultiprocessChannel`, `ZmqChannel`, or
-  `ZenohChannel` can land without breaking the top-level API. The blockers
-  are dependency policy, serialization policy, and how much transport behavior
-  can preserve the SPSC fail-fast contract from ADR 0010. `merge`,
-  `load_balance`, and `worker_pool` define the in-process topology semantics
-  transports should preserve where possible.
+- **Transport hardening and additional adapters.** `runlet.transports.zmq`
+  is the first optional remote adapter (ADR 0011). Remaining work: retry/
+  reconnect policy, transport diagnostics, a firmer peer-close story, and
+  whether a future `MultiprocessChannel` or `ZenohChannel` earns its
+  dependency cost. `merge`, `load_balance`, and `worker_pool` define the
+  in-process topology semantics transports should preserve where possible.
 - **Test fixtures.** A `pytest` plugin for common supervisor + SimClock setup.
 
 ## Maybe, Not Committed

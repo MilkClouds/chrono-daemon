@@ -10,20 +10,18 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - uses: actions/checkout@v7
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
+      - name: Install Python
+        run: uv python install 3.11
+
       - name: Install dependencies
-        run: uv sync --dev --locked
+        run: uv sync --dev --extra zmq --locked
 
       - name: Check
         run: make check

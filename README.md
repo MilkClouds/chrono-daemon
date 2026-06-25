@@ -51,7 +51,7 @@ async def main() -> None:
   backpressure stay visible.
 - Lifecycle behavior is structured. Daemons get startup, shutdown, logging,
   cancellation, and error policy in one place.
-- The runtime surface is small: pure Python, `anyio` underneath, and no
+- The core runtime is small: pure Python, `anyio` underneath, and no
   runtime dependency beyond `anyio`.
 
 ## Core API
@@ -78,13 +78,19 @@ simulator.
 ## Install / dev
 
 ```bash
-uv sync --dev
+uv sync --dev --extra zmq
 make check        # ruff + pyrefly
 make test         # pytest on asyncio + trio
 make all          # format + check + test
 ```
 
-Python 3.11+. Only runtime dependency is `anyio>=4`.
+Python 3.11+. Only runtime dependency is `anyio>=4`; `--extra zmq` installs
+the optional transport dependencies needed for the full test suite.
+Remote ZMQ channels are optional:
+
+```bash
+pip install "runlet[zmq]"
+```
 
 ## Where to look next
 
@@ -96,6 +102,8 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
   surface but importable under `runlet.recipes.*`: fanout, fan-in,
   load balancing, worker pools, batcher, select, sync/async bridge.
   Source in `src/runlet/recipes/`.
+- `runlet.transports.zmq`: optional asyncio-backed ZMQ channel endpoints.
+  Install with `runlet[zmq]`; see ADR 0011.
 - [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.
 - [`examples/system_stack_mock.py`](examples/system_stack_mock.py): multi-rate
@@ -104,6 +112,6 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 
 ## Status
 
-Early. In-process only. The `Channel` protocol is shaped so multi-process
-and network transports can be added later without breaking changes
-(see ADR 0006).
+Early. In-process channels are the default and keep zero runtime dependencies
+beyond `anyio`. ZMQ remote channels are available as an optional extra
+(`runlet[zmq]`) for asyncio-backed deployments.

@@ -16,6 +16,12 @@ dependencies = [
     "anyio>=4",
 ]
 
+[project.optional-dependencies]
+zmq = [
+    "msgspec>=0.18",
+    "pyzmq>=26",
+]
+
 [project.urls]
 Repository = "https://github.com/MilkClouds/runlet"
 

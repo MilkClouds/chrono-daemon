@@ -1,7 +1,7 @@
 # Concepts
 
 runlet is four small primitives on top of `anyio`. Everything else, including
-fanout, batching, multi-channel waits, and sync↔async bridging, is built from
+fanout, batching, multi-channel waits, and sync/async bridging, is built from
 these four.
 
 ## The four primitives
@@ -22,6 +22,14 @@ When topology gets more complex, keep each edge SPSC and add a named routing
 daemon. `runlet.recipes.merge` covers N:1 fan-in, `load_balance` covers 1:N
 competing-consumer routing, `worker_pool` covers ready-worker dispatch, and
 `fanout.tee` covers broadcast.
+
+The default `open_channel()` implementation is in-process and backend-agnostic.
+`runlet.transports.zmq` provides optional TCP-backed endpoints installed with
+`runlet[zmq]`. It preserves the `SendStream` / `ReceiveStream` call surface,
+but uses `pyzmq.asyncio`, so it is for asyncio-backed deployments. Its
+backpressure and peer-close behavior follow ZMQ queue and control-frame
+semantics rather than exact in-process rendezvous semantics; ADR 0011 records
+that tradeoff.
 
 ### `Clock`
 
@@ -134,10 +142,11 @@ bug, not a tuning knob:
 
 - Topic / pub-sub broadcast → `runlet.recipes.fanout.tee` (see docs/recipes.md).
 - Services, RPC, parameter system, discovery.
-- Multi-process or network transport in the current release. The API is
-  shaped so they can be added later without breaking changes; see ADR 0006.
+- First-class transport discovery or a transport runtime. The optional ZMQ
+  adapter is a channel endpoint factory, not a launcher or service registry.
 - Lifecycle states beyond `on_start`/`run`/`on_stop`.
-- Dependency on anything other than `anyio` (ADR 0007).
+- Core dependency on anything other than `anyio` (ADR 0007). Optional extras
+  may add transport-specific dependencies.
 
 If you want one of these, check `docs/recipes.md`, `docs/roadmap.md`, and the
 relevant ADR first.

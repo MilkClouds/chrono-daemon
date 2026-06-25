@@ -29,3 +29,4 @@ number: `000N-short-summary.md`.
 - [0008: Sim-time-aware logging and supervisor diagnostics](0008-sim-aware-logging-and-supervisor-diagnostics.md)
 - [0009: Cooperative stop signaling on Supervisor](0009-cooperative-stop-signaling.md)
 - [0010: Channel endpoints are single-owner](0010-channel-endpoints-are-single-owner.md)
+- [0011: ZMQ transport ships as an optional extra](0011-zmq-transport-extra.md)
