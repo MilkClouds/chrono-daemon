@@ -12,7 +12,7 @@ ship.
   shared `anyio.Event` set after all daemons register removes the
   ambiguity. This is small enough to be a recipe, common enough that promoting
   it into the core is on the table. (Surfaced by
-  `examples/reflex_dual_mock.py`.)
+  `examples/system_stack_mock.py`.)
 - **Multi-process and network transports.** `Channel` is already a Protocol
   (ADR 0006), so adapters such as `MultiprocessChannel`, `ZmqChannel`, or
   `ZenohChannel` can land without breaking the top-level API. The blockers

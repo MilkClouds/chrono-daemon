@@ -111,7 +111,7 @@ recorded in ADR 0001.
 
 Supervisors compose recursively. A daemon may itself open an inner
 `async with Supervisor(...)` and host its own sub-pipeline with its own
-`SimClock`. `examples/reflex_dual_multi_session.py` uses this pattern for
+`SimClock`. `examples/system_stack_multi_session.py` uses this pattern for
 per-session isolation. Each session is a daemon on the outer supervisor
 that nests its own inner supervisor + clock. No new primitive needed.
 

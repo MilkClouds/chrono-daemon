@@ -1,4 +1,4 @@
-"""Pin the reflex-dual mock example: same inputs → identical actuator log on both backends."""
+"""Pin the system-stack mock example: same inputs → identical actuator log on both backends."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 sys.path.insert(0, str(EXAMPLES_DIR))
 
-from reflex_dual_mock import (  # noqa: E402  (sys.path mutation above is intentional)
+from system_stack_mock import (  # noqa: E402  (sys.path mutation above is intentional)
     Action,
     run_mock,
 )
@@ -18,7 +18,7 @@ from reflex_dual_mock import (  # noqa: E402  (sys.path mutation above is intent
 pytestmark = pytest.mark.anyio
 
 
-async def test_reflex_dual_mock_produces_actions() -> None:
+async def test_system_stack_mock_produces_actions() -> None:
     log: list[Action] = await run_mock(duration_s=2.0)
     # The exact count depends on SimClock timing of S2_LATENCY + S1_LATENCY + S0
     # dispense rate; what matters is that the pipeline produced a nontrivial
@@ -30,7 +30,7 @@ async def test_reflex_dual_mock_produces_actions() -> None:
     assert times == sorted(times)
 
 
-async def test_reflex_dual_mock_is_deterministic_across_runs(anyio_backend: str) -> None:
+async def test_system_stack_mock_is_deterministic_across_runs(anyio_backend: str) -> None:
     """Two runs produce structurally identical logs (same length + monotone time).
 
     Byte-equality additionally holds on asyncio but not on trio: trio's default
@@ -45,7 +45,7 @@ async def test_reflex_dual_mock_is_deterministic_across_runs(anyio_backend: str)
         assert a == b
 
 
-async def test_reflex_dual_mock_scales_with_sim_time() -> None:
+async def test_system_stack_mock_scales_with_sim_time() -> None:
     """Twice the virtual duration ⇒ strictly more actions."""
     short = await run_mock(duration_s=1.0)
     long = await run_mock(duration_s=2.0)
@@ -55,7 +55,7 @@ async def test_reflex_dual_mock_scales_with_sim_time() -> None:
 # -- multi-session example ------------------------------------------------
 
 
-from reflex_dual_multi_session import run_multi_session, run_with_early_unregister  # noqa: E402
+from system_stack_multi_session import run_multi_session, run_with_early_unregister  # noqa: E402
 
 
 async def test_multi_session_isolation() -> None:

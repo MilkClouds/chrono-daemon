@@ -9,7 +9,7 @@ down. The only paths were:
 
 - Raise from inside a daemon (ADR 0004 turns this into a sibling-cancel via
   `on_error="shutdown"`). Works but pollutes the call site with sentinel
-  exception handling. the post-mortem of `examples/reflex_dual_mock.py`
+  exception handling. the post-mortem of `examples/system_stack_mock.py`
   showed this directly: every demo with a finite duration had a
   `_PipelineDone` class and a matching `except* _PipelineDone` swallow.
 - Cancel the outer task. Yanks anyio's task-group cancel without giving
@@ -64,7 +64,7 @@ wraps `ctx.clock.every` with the polling check at every yield point.
 ## Consequences
 
 + The "sentinel exception to terminate the pipeline" anti-pattern is gone
-  from `examples/reflex_dual_mock.py`. The main task does
+  from `examples/system_stack_mock.py`. The main task does
   `await clock.advance(N); await sup.stop(grace=0)` and the demo exits
   cleanly with the actuator log intact.
 + `signal_stop` gives daemons that need to terminate the whole supervisor

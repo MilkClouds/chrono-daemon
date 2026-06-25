@@ -6,14 +6,14 @@ than recipes, but still small enough to inspect in one sitting. The tests in
 
 ## Index
 
-- `reflex_dual_mock.py`: a single-session System 2 / 1 / 0 inference pipeline.
+- `system_stack_mock.py`: a single-session System 2 / 1 / 0 inference pipeline.
   Model calls are mocked with `ctx.clock.sleep(...)` and deterministic toy
   computations.
-- `reflex_dual_multi_session.py`: a multi-session dispatcher built from nested
+- `system_stack_multi_session.py`: a multi-session dispatcher built from nested
   `Supervisor` instances. Each session owns its own `SimClock`.
 
 The longer ergonomic postmortem lives in
-`docs/archive/reflex-dual-postmortem.md`.
+`docs/archive/system-stack-postmortem.md`.
 
 ## Determinism Note
 
