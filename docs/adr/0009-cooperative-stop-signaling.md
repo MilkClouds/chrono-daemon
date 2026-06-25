@@ -8,10 +8,8 @@ The four-primitive core gave callers no in-band way to bring a supervisor
 down. The only paths were:
 
 - Raise from inside a daemon (ADR 0004 turns this into a sibling-cancel via
-  `on_error="shutdown"`). Works but pollutes the call site with sentinel
-  exception handling. the post-mortem of `examples/system_stack_mock.py`
-  showed this directly: every demo with a finite duration had a
-  `_PipelineDone` class and a matching `except* _PipelineDone` swallow.
+  `on_error="shutdown"`). Works, but requires sentinel exceptions for normal
+  termination.
 - Cancel the outer task. Yanks anyio's task-group cancel without giving
   any daemon a chance to clean up.
 
@@ -28,9 +26,7 @@ The interaction with the two clock implementations matters:
   buys cooperative shutdown.
 - `SimClock` only moves when something calls `advance(...)`. The supervisor
   cannot make sim time pass on a daemon's behalf, so a daemon sleeping on
-  `ctx.clock.sleep` in the middle of a stop is stuck. there's no advance
-  coming. "Graceful with grace=5" under SimClock degrades to "wait 5
-  wall-clock seconds, then cancel."
+  `ctx.clock.sleep` during stop may need force-cancellation.
 
 The design has to accept this asymmetry rather than paper over it.
 
@@ -40,16 +36,16 @@ Two methods on `Supervisor`, plus two read-only fields on `Context`:
 
 - `Supervisor.signal_stop()`. sync, idempotent. Sets a shared
   `anyio.Event` exposed on each daemon's `Context`. Safe to call from
-  *inside* a daemon (fire-and-forget). the calling daemon should then
+  *inside* a daemon (fire-and-forget). The calling daemon should then
   return normally; the standard return path runs `on_stop`.
 - `await Supervisor.stop(grace=5.0, finalize_timeout=2.0)`. async. Calls
   `signal_stop`, waits up to `grace` wall-clock seconds for daemons to
   finish, then force-cancels any still running. Should be called from the
   supervisor's main task; calling it from inside a daemon traps the daemon
   in its own grace-wait.
-- `Context.stop_event`. the `anyio.Event` itself. Daemons may
+- `Context.stop_event`. The `anyio.Event` itself. Daemons may
   `await ctx.stop_event.wait()` when they want to block until stop.
-- `Context.stopping`. a `bool` shortcut for `ctx.stop_event.is_set()`,
+- `Context.stopping`. A `bool` shortcut for `ctx.stop_event.is_set()`,
   intended for `if ctx.stopping: break` polling between work units.
 
 On the force-cancel path, each daemon's `on_stop` still gets a best-effort
@@ -63,10 +59,8 @@ wraps `ctx.clock.every` with the polling check at every yield point.
 
 ## Consequences
 
-+ The "sentinel exception to terminate the pipeline" anti-pattern is gone
-  from `examples/system_stack_mock.py`. The main task does
-  `await clock.advance(N); await sup.stop(grace=0)` and the demo exits
-  cleanly with the actuator log intact.
++ Finite demos can now call `await sup.stop(grace=0)` instead of raising a
+  sentinel exception.
 + `signal_stop` gives daemons that need to terminate the whole supervisor
   a clean fire-and-forget primitive (`ctx.supervisor.signal_stop()`); they
   return normally and `on_stop` runs on the standard path.
@@ -74,15 +68,12 @@ wraps `ctx.clock.every` with the polling check at every yield point.
   `runlet.recipes.sync_bridge`) can use the portal to invoke either method.
 + On the force-cancel path, `on_stop` is no longer skipped; cleanup that
   fits inside `finalize_timeout` runs even for non-cooperative daemons.
-- The "graceful" guarantee of `stop(grace=N)` is real under `WallClock` but
-  effectively force-cancel-after-N under `SimClock`. The asymmetry is
-  documented in the docstrings of both `SimClock` and `Supervisor.stop`,
-  and reflected in the example by passing `grace=0`.
+- `stop(grace=N)` is graceful under `WallClock`; under `SimClock`, sleeping
+  daemons may still need force-cancellation.
 - `Context` now has two interchangeable surfaces for stop awareness
   (`stop_event` and `stopping`). The bool is the recommended default;
   the event is for daemons that genuinely want to await on it.
-- `cooperative_every` is a recipe, not a core primitive. the same
-  stability disclaimer as ADR 0001's `fanout`. Daemons can also just
+- `cooperative_every` is a recipe, not a core primitive. Daemons can also
   inline the `if ctx.stopping: break` check.
 
 ## Related

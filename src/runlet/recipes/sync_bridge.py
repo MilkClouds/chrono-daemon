@@ -1,10 +1,4 @@
-"""Recipe: host an async runlet supervisor behind a synchronous API.
-
-Many deployments hand you a synchronous outer boundary (a model-server
-callback, a ROS subscriber, a CLI handler) but want the inside to be a
-long-lived runlet supervisor. anyio ships ``BlockingPortal`` for exactly
-this; ``host_async_dispatcher`` wraps that into the common "async dispatcher
-behind a sync ABC" shape.
+"""Host an async runlet supervisor behind a synchronous API.
 
 Usage::
 
@@ -15,11 +9,7 @@ Usage::
     with host_async_dispatcher(setup) as (portal, dispatcher):
         portal.call(dispatcher.push, item)
 
-The supervisor uses :class:`runlet.WallClock` by default; pass ``clock=``
-to override.
-
-Import as ``from runlet.recipes.sync_bridge import host_async_dispatcher``.
-The recipe namespace (``runlet.recipes``) is best-effort.
+The supervisor uses :class:`runlet.WallClock` unless ``clock=`` is provided.
 """
 
 from __future__ import annotations
@@ -48,15 +38,8 @@ def host_async_dispatcher(
 ) -> Generator[tuple[BlockingPortal, D], None, None]:
     """Spin up a supervisor on a private event loop; yield ``(portal, dispatcher)``.
 
-    ``setup(supervisor)`` is awaited once on the background loop. Whatever it
-    returns is the dispatcher object handed to sync callers; they invoke its
-    async methods via ``portal.call(dispatcher.method, ...)``.
-
-    The supervisor is torn down (``stop(grace=0)``) when the ``with`` block
-    exits; the portal is then shut down.
-
-    Raises :class:`RuntimeError` if ``setup`` does not return within
-    ``ready_timeout`` wall-clock seconds.
+    ``setup(supervisor)`` runs on the background loop and returns the
+    dispatcher object for sync callers.
     """
     box: list[D | None] = [None]
     error: list[BaseException | None] = [None]

@@ -1,31 +1,4 @@
-"""Supervisor: structured-concurrency root for hosting daemons.
-
-A ``Supervisor`` is an async context manager wrapping ``anyio.create_task_group``. Each
-daemon gets its own ``Context`` (with its own ``cancel_scope``, ``logger`` child, and
-``name``). On unhandled exception, the supervisor's ``on_error`` policy decides what
-to do:
-
-- ``"shutdown"`` (default): re-raise wrapped in :class:`DaemonError` so the failing
-  daemon's name reaches the resulting ``ExceptionGroup`` leaf. anyio's TaskGroup
-  cancels every sibling.
-- ``"restart"``: sleep on ``ctx.clock`` per ``RestartPolicy`` (exponential
-  backoff), then re-enter ``on_start``/``run`` after startup/runtime failures.
-  Cleanup failures from ``on_stop`` are terminal unless ``on_error="ignore"``.
-  Because backoff goes through ``ctx.clock.sleep``, restart timing is
-  deterministic under ``SimClock``.
-- ``"ignore"``: log and let the daemon exit; siblings keep running.
-
-Graceful shutdown (ADR 0009):
-
-- :meth:`Supervisor.signal_stop` is sync, fire-and-forget. Sets a shared event
-  on every daemon's :class:`Context` (``ctx.stop_event``). Cooperative daemons
-  poll ``ctx.stopping`` and exit cleanly so ``on_stop`` runs as part of the
-  normal return path.
-- :meth:`Supervisor.stop` is async: signals stop, waits up to ``grace`` for
-  daemons to honor it, then force-cancels any still running. On the force
-  path, each daemon's ``on_stop`` still gets a best-effort shielded
-  invocation bounded by ``finalize_timeout``.
-"""
+"""Structured-concurrency root for hosting daemons."""
 
 from __future__ import annotations
 
@@ -47,17 +20,7 @@ from runlet.daemon import Daemon, _FnDaemon
 __all__ = ["DaemonFailurePhase", "DaemonHealth", "DaemonState", "RestartPolicy", "Supervisor"]
 
 DaemonState = Literal["starting", "running", "restarting", "stopped", "failed"]
-"""Lifecycle state surfaced by :class:`DaemonHealth`.
-
-- ``starting``: inside ``on_start`` or before it returns.
-- ``running``: ``on_start`` returned; ``run`` is executing.
-- ``restarting``: ``on_error="restart"`` is waiting out the backoff before
-  the next ``on_start``.
-- ``stopped``: the host returned normally (clean exit, ``on_stop`` ran).
-- ``failed``: the host exited because an exception escaped past all retries
-  (shutdown / ignore terminal / restart exhausted). ``last_error`` carries
-  the cause.
-"""
+"""Lifecycle state surfaced by :class:`DaemonHealth`."""
 
 DaemonFailurePhase = Literal["on_start", "run", "on_stop"]
 """Lifecycle phase that produced ``DaemonHealth.last_error``."""
@@ -65,12 +28,7 @@ DaemonFailurePhase = Literal["on_start", "run", "on_stop"]
 
 @dataclass
 class RestartPolicy:
-    """Exponential backoff for ``on_error="restart"``.
-
-    The first restart waits ``base`` seconds, the second waits ``base * factor``, etc.,
-    capped at ``cap``. If ``max_retries`` is set and exceeded, the latest exception is
-    re-raised (which under the default supervisor will then cancel siblings).
-    """
+    """Exponential backoff for ``on_error="restart"``."""
 
     base: float = 0.1
     factor: float = 2.0
@@ -80,40 +38,20 @@ class RestartPolicy:
 
 @dataclass(frozen=True)
 class DaemonHealth:
-    """Snapshot of one hosted daemon's runtime state.
-
-    Returned by :meth:`Supervisor.snapshot`. All times are read from the
-    supervisor's :class:`runlet.Clock`, so they advance under ``SimClock``
-    burst replay the same way the daemon's own timestamps do.
-
-    Frozen so consumers can pass it around without worrying about it
-    mutating mid-read; the supervisor holds the underlying mutable state.
-    """
+    """Snapshot of one hosted daemon's runtime state."""
 
     name: str
     state: DaemonState
     restart_count: int
-    """How many times this daemon has been re-entered after a failure under
-    ``on_error="restart"``. Zero on first attempt; bumped before the next
-    ``on_start``.
-    """
+    """Number of restarts after failures."""
     last_error: BaseException | None
-    """The most recent exception that escaped ``on_start()``, ``run()``, or
-    normal-path ``on_stop()``. ``None`` if the daemon has never raised.
-    """
+    """Most recent lifecycle exception, if any."""
     last_error_phase: DaemonFailurePhase | None
-    """Lifecycle phase that produced ``last_error``. ``None`` if
-    ``last_error`` is ``None``.
-    """
+    """Lifecycle phase that produced ``last_error``."""
     started_at: float | None
-    """Clock-time when the current attempt's ``on_start`` returned. ``None``
-    if the daemon has not yet finished ``on_start``. Reset on each restart.
-    """
+    """Clock-time when the current attempt's ``on_start`` returned."""
     uptime: float | None
-    """``clock.now() - started_at`` for the current attempt, or ``None`` if
-    ``started_at`` is. Computed at snapshot time so successive reads of
-    the same ``DaemonHealth`` don't drift.
-    """
+    """Current-at-snapshot uptime for running daemons."""
 
 
 @dataclass
@@ -221,13 +159,8 @@ class Supervisor:
     def add(self, daemon: Daemon, *, name: str | None = None) -> None:
         """Register a Daemon instance. Launched immediately if the supervisor is running.
 
-        Raises :class:`ValueError` if ``name`` collides with a previously
-        registered daemon. Daemon names key diagnostics such as
-        :meth:`snapshot`, so collisions would make health records ambiguous.
-
-        Raises :class:`TypeError` if ``daemon`` is not a :class:`Daemon`
-        instance. A common mistake is to pass the ``@daemon`` factory itself
-        rather than calling it; the error message points that out explicitly.
+        Raises ``ValueError`` on duplicate names and ``TypeError`` for
+        non-daemon values, including an uncalled ``@daemon`` factory.
         """
         if not isinstance(daemon, Daemon):
             if callable(daemon) and getattr(daemon, "_runlet_daemon_factory", False):
@@ -258,10 +191,7 @@ class Supervisor:
         name: str | None = None,
         **kwargs: Any,
     ) -> None:
-        """Adapter for ad-hoc async fns: wraps ``fn`` into a one-off Daemon and registers it.
-
-        ``fn`` must accept ``ctx`` as its first parameter.
-        """
+        """Wrap ``fn(ctx, *args, **kwargs)`` into a one-off daemon."""
         chosen = name or fn.__name__
         d = _FnDaemon(fn, args, kwargs, chosen)
         self.add(d, name=chosen)
@@ -271,10 +201,8 @@ class Supervisor:
     def signal_stop(self) -> None:
         """Sync, fire-and-forget. Set the stop event so cooperative daemons can exit.
 
-        Idempotent. Safe to call from inside a daemon — the calling daemon should
-        then ``return`` normally so its ``on_stop`` runs as part of the standard
-        path. To additionally wait for all daemons to finish (and force-cancel
-        any that don't), use :meth:`stop` from the supervisor's main task.
+        Safe to call from inside a daemon. Use :meth:`stop` when the caller
+        also needs to wait and force-cancel laggards.
         """
         if self._stop_event is not None:
             self._stop_event.set()
@@ -282,14 +210,8 @@ class Supervisor:
     async def stop(self, grace: float = 5.0, finalize_timeout: float = 2.0) -> None:
         """Signal stop, wait up to ``grace`` for cooperative exit, then force-cancel.
 
-        Each daemon's ``on_stop`` runs naturally when it cooperates. On the
-        force-cancel path, ``on_stop`` is still given a best-effort shielded
-        invocation bounded by ``finalize_timeout``.
-
-        Idempotent. Safe to call before the supervisor has entered its async
-        context (no-op) or after all daemons have exited (returns immediately).
-        Should be called from the supervisor's main task, not from inside a
-        daemon that wants to terminate itself — use :meth:`signal_stop` for that.
+        Idempotent. Calling it before entry is a no-op. Daemons that want to
+        stop their own supervisor should call :meth:`signal_stop` and return.
         """
         # Set finalize_timeout *before* signaling stop so the host loop sees
         # the right value if cancellation arrives near-immediately.
@@ -310,23 +232,8 @@ class Supervisor:
     async def wait_all_started(self) -> None:
         """Block until every currently-hosted daemon's ``on_start`` has resolved.
 
-        "Resolved" means the host loop reached one of:
-        - ``on_start`` returned (record.state transitions to ``running``), or
-        - the daemon's lifecycle finished (failed / stopped before/during
-          ``on_start`` — see the failure paths in ``_host``).
-
-        Use this when a driver task wants to be sure every daemon is past its
-        setup phase before doing something time-sensitive (e.g. calling
-        :meth:`runlet.SimClock.advance` for deterministic burst replay — under
-        trio the scheduler can otherwise start ``advance`` before all daemons
-        register their first sleep, costing byte-determinism across runs).
-
-        Snapshot semantics: waits for the daemons known at call time; daemons
-        added afterwards aren't tracked by this call (call it again if you
-        need a fresh barrier). Safe to call before ``__aenter__`` (pending
-        registrations are not hosted yet, so this returns immediately) or
-        after exit (events are all set during host teardown, so this is a
-        no-op).
+        Waits for the daemon set known at call time. Safe before entry or
+        after exit; both are no-ops.
         """
         if self._tg is None:
             return
@@ -341,13 +248,8 @@ class Supervisor:
     def snapshot(self) -> dict[str, DaemonHealth]:
         """Return a name -> :class:`DaemonHealth` map for all known daemons.
 
-        Cheap and read-only — safe to call from any task at any time, including
-        before ``__aenter__`` (returns daemons queued via ``add()``) and after
-        ``__aexit__`` (returns the terminal state of each daemon).
-
-        Uptime is computed at call time as ``clock.now() - started_at`` for
-        each ``running`` daemon. Under :class:`runlet.SimClock`, this advances
-        in lockstep with the rest of the simulation.
+        Safe before entry and after exit. Running-daemon uptime is computed at
+        call time from the supervisor clock.
         """
         now: float | None = None
         out: dict[str, DaemonHealth] = {}
@@ -358,9 +260,7 @@ class Supervisor:
                     now = self._clock.now()
                 uptime = now - rec.started_at
             elif rec.started_at is not None:
-                # Daemon has stopped / failed / is restarting — uptime reflects
-                # how long the *last* attempt ran for. We can't tell exactly
-                # without recording an exit timestamp; report None to avoid lying.
+                # No exit timestamp is stored, so terminal uptime is unknown.
                 uptime = None
             else:
                 uptime = None
@@ -378,25 +278,14 @@ class Supervisor:
     # -- internals -------------------------------------------------------------
 
     def _on_daemon_exit(self) -> None:
-        # Only ever called from _host's finally, which only runs inside the task
-        # group entered by __aenter__ — so both events are guaranteed live here.
+        # _host only runs after __aenter__, so both events are live here.
         assert self._stop_event is not None and self._all_done is not None
         self._active_count -= 1
         if self._active_count == 0 and self._stop_event.is_set():
             self._all_done.set()
 
     async def _host(self, daemon: Daemon, name: str) -> None:
-        """Lifecycle wrapper running inside the task group for one daemon.
-
-        Lifecycle guarantee: if ``on_start(ctx)`` returned successfully, ``on_stop(ctx)``
-        is invoked exactly once before the host returns or re-raises — on the normal
-        path, the Exception paths (shutdown/restart/ignore), and the forceful cancel
-        path. Normal cleanup runs outside the daemon's cancel scope. The
-        cancel/shutdown/ignore paths run ``on_stop`` inside a shielded scope
-        bounded by ``self._finalize_timeout``; the restart path runs it inline
-        between attempts so each iteration sees ``on_start`` paired with
-        ``on_stop``.
-        """
+        """Run one daemon's lifecycle inside the task group."""
         delay = self._restart.base
         retries = 0
         cancelled_cls = anyio.get_cancelled_exc_class()
@@ -435,13 +324,11 @@ class Supervisor:
                     record.state = "stopped"
                     return
                 except BaseException as exc:
-                    # If on_start succeeded, on_stop is owed regardless of how we exit.
-                    # Run it under a shield so cancellation cannot cut cleanup short.
+                    # If on_start succeeded, on_stop is owed on every exit path.
                     if on_start_done and not on_stop_started:
                         await self._run_on_stop_shielded(daemon, ctx)
                     if isinstance(exc, cancelled_cls):
-                        # Cancellation isn't a failure of the daemon's own logic
-                        # — record stopped, then propagate.
+                        # Cancellation is not a daemon logic failure.
                         record.state = "stopped"
                         raise
                     if not isinstance(exc, Exception):
@@ -461,7 +348,7 @@ class Supervisor:
                     if self._on_error == "ignore":
                         record.state = "stopped"
                         return
-                    # restart path — but bail out if stop was already signaled.
+                    # Restart path; stop wins over retry.
                     if self._stop_event.is_set():
                         record.state = "stopped"
                         return
@@ -475,22 +362,12 @@ class Supervisor:
                     await self._clock.sleep(delay)
                     delay = min(delay * self._restart.factor, self._restart.cap)
         finally:
-            # Unblock wait_all_started() even if on_start never succeeded —
-            # otherwise a daemon that fails before/inside on_start would hang
-            # any concurrent waiter forever. The waiter is expected to inspect
-            # state via snapshot() if it needs to distinguish started-cleanly
-            # from never-started.
+            # Avoid hanging wait_all_started() if startup failed or was cancelled.
             record.started_event.set()
             self._on_daemon_exit()
 
     async def _run_on_stop_shielded(self, daemon: Daemon, ctx: Context) -> None:
-        """Run ``daemon.on_stop`` under a shielded scope with a finite time budget.
-
-        Used on all non-normal exit paths (cancel + shutdown + restart + ignore) so
-        ``on_stop`` is reached even when the surrounding code is being torn down.
-        Exceptions raised by ``on_stop`` are logged and swallowed — the outer path's
-        decision (re-raise, restart, etc.) takes precedence.
-        """
+        """Run ``daemon.on_stop`` under a shielded finite budget."""
         with anyio.CancelScope(shield=True):
             with anyio.move_on_after(self._finalize_timeout):
                 try:

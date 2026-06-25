@@ -1,4 +1,4 @@
-"""Pin the system-stack mock example: same inputs → identical actuator log on both backends."""
+"""Pin the system-stack examples."""
 
 from __future__ import annotations
 
@@ -20,24 +20,14 @@ pytestmark = pytest.mark.anyio
 
 async def test_system_stack_mock_produces_actions() -> None:
     log: list[Action] = await run_mock(duration_s=2.0)
-    # The exact count depends on SimClock timing of S2_LATENCY + S1_LATENCY + S0
-    # dispense rate; what matters is that the pipeline produced a nontrivial
-    # stream and that every action carries a coherent (cog, t_dispensed).
     assert len(log) > 0
     assert all(isinstance(a, Action) for a in log)
-    # Time must be monotonically non-decreasing (S0 dispenses sequentially).
     times = [a.t_dispensed for a in log]
     assert times == sorted(times)
 
 
 async def test_system_stack_mock_is_deterministic_across_runs(anyio_backend: str) -> None:
-    """Two runs produce structurally identical logs (same length + monotone time).
-
-    Byte-equality additionally holds on asyncio but not on trio: trio's default
-    scheduler intentionally randomizes task-spawn order across runs (an
-    ASLR-like measure against accidental ordering dependence). See
-    ``examples/README.md`` for the short discussion.
-    """
+    """Asyncio is byte-identical; trio is structurally deterministic."""
     a = await run_mock(duration_s=2.0)
     b = await run_mock(duration_s=2.0)
     assert len(a) == len(b)
@@ -59,13 +49,7 @@ from system_stack_multi_session import run_multi_session, run_with_early_unregis
 
 
 async def test_multi_session_isolation() -> None:
-    """Each session runs to its own duration in its own inner Supervisor.
-
-    Sessions with different ``duration_s`` produce different action counts
-    proportional to their duration, proving the per-session SimClocks are
-    actually independent. Durations need to exceed S2's 1 Hz period so the
-    first subgoal lands and S1/S0 can produce.
-    """
+    """Each session runs to its own duration."""
     logs = await run_multi_session({"short": 2.0, "long": 3.0})
     assert set(logs) == {"short", "long"}
     for sid, log in logs.items():
@@ -74,13 +58,7 @@ async def test_multi_session_isolation() -> None:
 
 
 async def test_multi_session_unregister_cancels_only_that_session() -> None:
-    """Calling unregister before duration is up exits the targeted session promptly.
-
-    A full 10-sim-second run would produce ~200 actions (S0_HZ * effective time).
-    An honoured unregister produces dramatically fewer. More importantly, the
-    test returns rather than hanging on the long duration.
-    """
+    """Early unregister exits the targeted session promptly."""
     log = await run_with_early_unregister(long_duration_s=10.0, cancel_after_s=0.0)
     assert log.sid == "victim"
-    # Conservative bound: without unregister this would be ~200; with it, far fewer.
     assert len(log.actions) < 100, f"unregister apparently not honored; got {len(log.actions)} actions"

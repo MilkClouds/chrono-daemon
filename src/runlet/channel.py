@@ -1,16 +1,4 @@
-"""Typed single-producer / single-consumer channel — the sole communication primitive.
-
-A ``Channel[T]`` is a bounded queue with two endpoints, ``send`` and ``recv``. The
-intended shape is exactly one producer task owning ``send`` and exactly one consumer
-task owning ``recv``. This is the only messaging primitive: fanout / pub-sub is
-intentionally absent. If a user needs to broadcast a single source to N consumers,
-they write an explicit ``tee`` themselves.
-
-Closing the send side propagates ``EndOfStream`` to all waiting receivers.
-
-The two endpoints are Protocols so future transport adapters (multiprocess,
-network) can plug in without breaking the API.
-"""
+"""Typed single-producer / single-consumer channel."""
 
 from __future__ import annotations
 
@@ -30,14 +18,7 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class ChannelStats:
-    """Snapshot of a channel's runtime state for diagnostics.
-
-    The fields are deliberately transport-agnostic: any future transport
-    (multi-process, network) is expected to fill them in best-effort. For
-    network transports the counts may be approximate (e.g. ``waiters_send``
-    may not be observable across hosts) — when a count cannot be determined,
-    it is reported as ``-1``.
-    """
+    """Transport-agnostic channel diagnostics."""
 
     current_buffer_used: int
     """Items currently buffered in the channel."""
@@ -71,10 +52,7 @@ class SendStream(Protocol[T]):
     def send_nowait(self, item: T) -> None:
         """Send an item without blocking. Raises ``WouldBlock`` if the buffer is full.
 
-        Enabling primitive for lossy-backpressure recipes (e.g.
-        ``recipes.lossy.DropOldestSend``); typical daemon code should reach for
-        the async ``send``. Raises ``ChannelClosed`` if the receive side has
-        been closed.
+        Raises ``ChannelClosed`` if the receive side has been closed.
         """
         ...
 
@@ -100,8 +78,7 @@ class ReceiveStream(Protocol[T]):
     def receive_nowait(self) -> T:
         """Receive one item without blocking. Raises ``WouldBlock`` if the buffer is empty.
 
-        Enabling primitive for lossy-backpressure recipes. Raises
-        ``EndOfStream`` if the send side has been closed and the buffer is
+        Raises ``EndOfStream`` if the send side has closed and the buffer is
         drained.
         """
         ...
@@ -211,8 +188,7 @@ class _Recv(Generic[T]):
             raise EndOfStream from e
 
     async def __aiter__(self) -> AsyncIterator[T]:  # type: ignore[override]
-        # We can't simply `async for x in self._inner: yield x` because the protocol
-        # requires our own EndOfStream conversion. Instead, loop with receive().
+        # Route through receive() for our EndOfStream conversion.
         while True:
             try:
                 yield await self.receive()
@@ -229,24 +205,8 @@ class _Recv(Generic[T]):
 def open_channel(maxsize: int = 0) -> Channel[T]:
     """Open a new in-process channel.
 
-    Parameters
-    ----------
-    maxsize:
-        Buffer capacity in items. ``0`` (default) means *strict rendezvous*: every
-        ``send()`` blocks until a receiver is ready. Use a small positive value
-        (e.g. ``maxsize=16``) when you want decoupling and tolerate some queuing.
-
-    Returns
-    -------
-    Channel[T]
-        A channel with ``send`` and ``recv`` endpoints.
-
-    Notes
-    -----
-    The intended ownership model is single producer / single consumer. Sharing
-    an endpoint between concurrently active daemons raises ``ChannelInUse`` for
-    blocking ``send`` / ``receive`` calls. There is no broadcast / fanout —
-    keep the wiring explicit.
+    ``maxsize=0`` is rendezvous. Positive values allow buffering. Concurrent
+    blocking use of one endpoint raises ``ChannelInUse``.
     """
     send_inner, recv_inner = anyio.create_memory_object_stream[T](max_buffer_size=maxsize)
     return Channel(send=_Send(send_inner), recv=_Recv(recv_inner))

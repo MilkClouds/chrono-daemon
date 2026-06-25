@@ -383,10 +383,7 @@ async def test_batcher_timeout_window_under_simclock() -> None:
 
 
 def test_sync_bridge_hosts_dispatcher_for_sync_callers() -> None:
-    """Sync code can invoke an async dispatcher's methods via the portal.
-
-    Not an anyio test — this exercises the sync-side surface of the recipe.
-    """
+    """Sync code can invoke an async dispatcher's methods via the portal."""
     from runlet.recipes.sync_bridge import host_async_dispatcher
 
     class _Dispatcher:

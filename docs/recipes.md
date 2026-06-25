@@ -4,10 +4,7 @@ Patterns kept out of the four-primitive core but shipped as importable
 helpers under `runlet.recipes`. The corresponding source lives in
 `src/runlet/recipes/`.
 
-Rule of thumb: if a pattern needs more than one daemon, one channel, and
-one clock to express, but doesn't generalize to "everyone wants this," it
-belongs here rather than in the top-level `runlet` namespace. Two
-practical consequences:
+Patterns that need extra wiring but should not be core live here. Consequences:
 
 - `runlet.recipes.*` is **best-effort**. Signatures may change between
   minor releases without a new ADR. If you depend on one in production,
@@ -23,35 +20,27 @@ The stability contract is restated at the top of
 
 - **`runlet.recipes.fanout.tee(src, *dests)`**:
   [`fanout.py`](../src/runlet/recipes/fanout.py). 1:N broadcast with
-  per-destination backpressure. Replaces the pub/sub `Topic` we chose not
-  to ship (ADR 0001).
+  per-destination backpressure.
 - **`runlet.recipes.merge.merge(sources, dest)`**:
   [`merge.py`](../src/runlet/recipes/merge.py). N:1 fan-in. Each producer owns
-  its own source channel; the merge daemon owns the output send endpoint and
-  forwards items with deliberate fan-in.
+  its own source channel; the merge daemon owns the output send endpoint.
 - **`runlet.recipes.load_balance.load_balance(source, dests)`**:
-  [`load_balance.py`](../src/runlet/recipes/load_balance.py). 1:N
-  competing-consumer routing. Each item goes to exactly one destination in
-  round-robin order.
+  [`load_balance.py`](../src/runlet/recipes/load_balance.py). Round-robin 1:N
+  competing-consumer routing; each item goes to exactly one destination.
 - **`runlet.recipes.worker_pool.worker_pool(incoming, results, handle)`**:
   [`worker_pool.py`](../src/runlet/recipes/worker_pool.py). Ready-worker job
   dispatch built from private SPSC worker channels. Handler returns and
-  exceptions are sent to a result stream.
+  exceptions are sent to `results`; drain it concurrently or size it for
+  the expected outputs.
 - **`runlet.recipes.select.select(*receivers)`**:
   [`select.py`](../src/runlet/recipes/select.py). Wait on the first of
-  several receivers to be ready. The Go `select` equivalent. anyio does
-  not ship this as a primitive because the structured-concurrency idiom
-  (`task_group` + `cancel_scope`) subsumes it; the recipe wraps that idiom.
+  several receivers to be ready.
 - **`runlet.recipes.batcher.batcher_loop / submit`**:
   [`batcher.py`](../src/runlet/recipes/batcher.py). Collate-forward-split:
   gather N independent requests into one batched call, then route
-  responses back. Supports a SimClock-compatible `max_queue_delay` timer
-  (raced against `incoming.receive` via `ctx.clock.sleep`, *not*
-  `anyio.move_on_after`; that one is wall-clock-only and would silently
-  misbehave under `SimClock`). On `forward` exceptions, every caller in
-  the batch sees the same exception (no silent partial failure). This is
-  deliberate fan-in on top of SPSC core channels, so callers should use
-  `submit()` rather than sharing blocking `send()` directly.
+  responses back. Use `submit()` for safe fan-in. Supports SimClock-compatible
+  `max_queue_delay`. On `forward` exceptions, every caller in the batch sees
+  the same exception.
 - **`runlet.recipes.cooperative_every.cooperative_every(ctx, period)`**:
   [`cooperative_every.py`](../src/runlet/recipes/cooperative_every.py).
   Stop-aware periodic iteration: like `ctx.clock.every(period)`, but exits
@@ -68,10 +57,7 @@ The stability contract is restated at the top of
   invoke its dispatcher via `BlockingPortal`.
 - **`runlet.recipes.lossy.DropNewestSend / DropOldestSend / CoalesceSend`**:
   [`lossy.py`](../src/runlet/recipes/lossy.py). `SendStream` wrappers
-  that never block the producer when the buffer is full: discard the
-  incoming item, evict the oldest buffered item, or single-slot coalesce
-  to "latest wins". Each tracks a `dropped` counter. Built on the
-  `send_nowait`/`receive_nowait` primitives. This is why those exist on
-  the `SendStream`/`ReceiveStream` protocols at all. `DropOldestSend` /
-  `CoalesceSend` are in-process only (they need `ReceiveStream` access);
-  a network transport would implement the same policy server-side.
+  that never block the producer when the buffer is full: drop newest, drop
+  oldest, or single-slot coalesce. `DropOldestSend` and `CoalesceSend` need
+  receive-side access, so they are in-process policies. Each tracks a
+  `dropped` counter.

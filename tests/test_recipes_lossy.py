@@ -1,9 +1,4 @@
-"""Lossy backpressure recipes: DropNewestSend, DropOldestSend, CoalesceSend.
-
-These wrappers satisfy the ``SendStream`` Protocol and never block the
-producer when the underlying channel buffer is full. Each test confirms
-the policy on both asyncio and trio.
-"""
+"""Lossy backpressure recipes."""
 
 from __future__ import annotations
 
@@ -22,7 +17,6 @@ async def test_drop_newest_discards_new_items_when_full() -> None:
 
     await lossy.send(1)
     await lossy.send(2)
-    # Buffer full; 3 and 4 are silently dropped.
     await lossy.send(3)
     await lossy.send(4)
 
@@ -37,7 +31,6 @@ async def test_drop_oldest_evicts_buffered_to_make_room() -> None:
 
     await lossy.send(1)
     await lossy.send(2)
-    # Buffer full → drop 1, store 3. Then drop 2, store 4.
     await lossy.send(3)
     await lossy.send(4)
 
@@ -71,9 +64,7 @@ async def test_drop_oldest_send_nowait_evicts_too() -> None:
 
 
 async def test_drop_oldest_with_concurrent_consumer() -> None:
-    """When a consumer is actively draining, drops should be 0 — the buffer
-    never stays full long enough for the wrapper to evict.
-    """
+    """An actively draining consumer prevents drops."""
     ch: Channel[int] = open_channel(maxsize=2)
     lossy = DropOldestSend(ch.send, ch.recv)
     received: list[int] = []

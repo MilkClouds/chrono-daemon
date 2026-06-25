@@ -1,20 +1,7 @@
 """System 2 / 1 / 0 mock pipeline with deterministic model stubs.
 
-This is an application-style three-rate inference pipeline. Each
-``S{N}Service`` call is replaced by ``await ctx.clock.sleep(latency)`` plus
-a deterministic toy computation, so the entire scenario runs in ~0
-wall-clock time under ``SimClock``.
-
-Byte-equality across repeated runs holds on the asyncio backend; trio's
-default scheduler randomizes task-spawn order across runs, so cross-run logs
-on trio agree in length, in monotone time, and in distribution, but not
-bit-for-bit. See ``examples/README.md`` for the discussion.
-
-In the service shape this models, observations are pushed into the dispatcher
-from outside. This mock follows the same shape: the supervisor's main task
-plays the harness role, writes the latest obs into ``obs_cache``, and advances
-the SimClock between writes. There is no in-pipeline ``sensor`` daemon; obs is
-an external input.
+The supervisor's main task pushes observations and advances ``SimClock``.
+S2/S1/S0 daemons sleep on that clock to model inference latency and rates.
 
 Pipeline layout (rates are virtual under ``SimClock``; numbers below mirror
 the rates of a typical slow-planner / fast-policy / high-rate-actuator stack):
@@ -85,12 +72,10 @@ class Action:
 
 # --- rates and mock latencies ---------------------------------------------
 
-# Rates mirror a representative hierarchical inference stack:
+# Representative hierarchical inference rates:
 #   - S2 fires at 1 Hz (period_ms: 1000)
 #   - S1 fires at 10 Hz (period_ms: 100)
 #   - S0 dispenses at the robot control rate (~20 Hz)
-# The harness pushes obs at S1's obs_sampling_rate_hz (20 Hz) so the inference
-# obs rate matches what S1 was trained against.
 OBS_RATE_HZ = 20.0
 S2_HZ = 1.0
 S1_HZ = 10.0
@@ -102,8 +87,6 @@ S1_LATENCY = 0.02
 
 
 # --- daemons ---------------------------------------------------------------
-# Note: no sensor daemon. Obs is pushed by the harness (the supervisor's
-# main task in run_mock, mirroring an external observation callback).
 
 
 @daemon
@@ -133,11 +116,7 @@ async def s1_policy(
     subgoal_cache: Latest[Subgoal],
     chunk_out: Channel[Chunk],
 ) -> None:
-    """Mock S1: every 1/S1_HZ second, produce an action chunk from latest obs+subgoal.
-
-    Closes ``chunk_out.send`` on the way out so downstream daemons see
-    ``EndOfStream`` and can exit on their own ``async for``.
-    """
+    """Mock S1: produce an action chunk from latest obs+subgoal."""
     try:
         async for _t in cooperative_every(ctx, 1.0 / S1_HZ):
             obs = obs_cache.get()
@@ -157,11 +136,7 @@ async def s0_dispenser(
     chunk_in: Channel[Chunk],
     action_out: Channel[Action],
 ) -> None:
-    """Pop chunks; dispense each action at 1/S0_HZ second.
-
-    Polls ``ctx.stopping`` mid-chunk so a long chunk doesn't delay shutdown.
-    Closes ``action_out.send`` so the actuator exits when we do.
-    """
+    """Pop chunks and emit actions at S0 rate."""
     period = 1.0 / S0_HZ
     try:
         async for chunk in chunk_in.recv:
@@ -180,11 +155,7 @@ async def actuator(
     action_in: Channel[Action],
     log: list[Action],
 ) -> None:
-    """Drain action stream into ``log`` for downstream assertions.
-
-    Terminates naturally when ``action_in.send`` is closed (cascading from
-    ``s0_dispenser`` after stop signaling).
-    """
+    """Drain actions into ``log``."""
     async for action in action_in.recv:
         log.append(action)
 
@@ -195,16 +166,8 @@ async def actuator(
 async def run_mock(duration_s: float = 2.0) -> list[Action]:
     """Run the mock pipeline for ``duration_s`` virtual seconds.
 
-    The supervisor's main task plays the harness role: each iteration writes
-    an Obs into the shared cache (the in-process equivalent of
-    ``dispatcher.push_obs``) and then advances the SimClock by one obs period
-    (the equivalent of ``dispatcher.tick``). When the simulated duration is
-    exhausted it calls ``await sup.stop(grace=0)`` to force-cancel any daemon
-    still sleeping on the (now-frozen) sim clock. Each daemon's
-    ``try/finally`` closes its downstream channel so the actuator drains
-    cleanly.
-
-    Returns the actuator log. Deterministic across runs on the asyncio backend.
+    Returns the actuator log. Asyncio runs are byte-identical; trio runs are
+    structurally deterministic (see ``examples/README.md``).
     """
     clock = SimClock()
     obs_cache: Latest[Obs] = Latest()

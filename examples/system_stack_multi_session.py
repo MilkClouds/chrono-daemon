@@ -1,24 +1,4 @@
-"""system-stack mock: multi-session dispatcher via nested Supervisors.
-
-Extends ``system_stack_mock`` to the N-concurrent-sessions shape used by a
-dispatcher-backed inference service. The structure:
-
-- The outer :class:`Supervisor` hosts a :class:`MockDispatcher` that
-  exposes ``register(sid, duration_s)`` and ``unregister(sid)``. These are the
-  per-session lifecycle operations exposed to the outer application.
-- Each registered session runs in an *inner* :class:`Supervisor` (with its
-  own :class:`SimClock`) spawned as one daemon on the outer one. The
-  inner supervisor owns the per-session S2/S1/S0/actuator daemons and the
-  per-session ``Latest`` caches.
-- ``unregister(sid)`` sets a per-session ``anyio.Event``; the session's
-  outer-side daemon notices on its next loop iteration, calls
-  ``inner.stop(grace=0)``, and returns. The outer supervisor's
-  ``_on_daemon_exit`` then forgets the session.
-
-This mirrors a per-session ``S{N}`` loop set plus per-session clock ownership
-without adding any new primitives to runlet: the supervisor primitive composes
-recursively, and ``anyio.Event`` carries the cancel signal.
-"""
+"""Multi-session System 2 / 1 / 0 mock using nested Supervisors."""
 
 from __future__ import annotations
 
@@ -62,13 +42,7 @@ async def session_runner(
     duration_s: float,
     cancel_event: anyio.Event,
 ) -> None:
-    """Host one session's S2/S1/S0/actuator pipeline in an inner Supervisor.
-
-    Returns when either (a) ``duration_s`` virtual seconds have elapsed on
-    the session's local sim clock, or (b) ``cancel_event`` fires (caller
-    called ``unregister``). Both paths shut the inner supervisor down with
-    ``stop(grace=0)``.
-    """
+    """Host one session's S2/S1/S0/actuator pipeline."""
     inner_clock = SimClock()
     obs_cache: Latest[Obs] = Latest()
     subgoal_cache: Latest[Subgoal] = Latest()
@@ -94,13 +68,7 @@ async def session_runner(
 
 
 class MockDispatcher:
-    """Outer-side handle exposing register/unregister over a Supervisor.
-
-    A small dispatcher surface limited to the parts that matter for lifecycle.
-    ``push_obs``/``tick`` are absent because under runlet each session's inner
-    SimClock and obs cache are driven inside ``session_runner``; a downstream
-    application can replace those by routing harness calls through this object.
-    """
+    """Outer handle that maps register/unregister to supervisor operations."""
 
     def __init__(self, sup: Supervisor) -> None:
         self._sup = sup
@@ -127,13 +95,7 @@ class MockDispatcher:
 
 
 async def run_multi_session(sessions: dict[str, float]) -> dict[str, SessionLog]:
-    """Run N sessions concurrently and return their logs.
-
-    Each session runs to its own configured ``duration_s`` and then exits
-    naturally; the outer Supervisor blocks on ``__aexit__`` until they all
-    do. See :func:`run_with_early_unregister` for the dynamic-unregister
-    shape that mirrors an external episode-end call.
-    """
+    """Run sessions concurrently and return their logs."""
     async with Supervisor() as outer:
         d = MockDispatcher(outer)
         for sid, dur in sessions.items():
@@ -145,11 +107,7 @@ async def run_with_early_unregister(
     long_duration_s: float,
     cancel_after_s: float,
 ) -> SessionLog:
-    """Start one long-running session, then ``unregister`` it after a brief delay.
-
-    Demonstrates the per-session cancel path: only the registered session is
-    stopped, not the supervisor as a whole.
-    """
+    """Start one long session, then unregister it."""
     async with Supervisor() as outer:
         d = MockDispatcher(outer)
         log = d.register("victim", duration_s=long_duration_s)

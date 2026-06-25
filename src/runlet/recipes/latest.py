@@ -1,18 +1,4 @@
-"""Recipe: one-slot "latest value" cache.
-
-When one daemon publishes values and N other daemons want the most-recent
-one (older values are uninteresting), a tiny ``Latest[T]`` holder is the
-right shape: no queue to drain, no lock needed for the at-most-one-writer
-case (CPython attribute reads/writes are atomic).
-
-Used in both system-stack examples to share the latest ``Obs`` / ``Subgoal``
-across S2/S1/S0 daemons without a broadcast channel (ADR 0001 keeps the
-core comm primitive at 1:1; ADR 0010 makes endpoints single-owner).
-
-Import as ``from runlet.recipes.latest import Latest``. The recipe
-namespace (``runlet.recipes``) is best-effort; see
-``src/runlet/recipes/__init__.py``.
-"""
+"""One-slot "latest value" cache."""
 
 from __future__ import annotations
 

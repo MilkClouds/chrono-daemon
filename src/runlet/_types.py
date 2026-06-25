@@ -15,57 +15,24 @@ __all__ = [
 
 
 class EndOfStream(Exception):
-    """Raised by `ReceiveStream.receive()` after the sender side is closed and the buffer is drained.
-
-    Mirrors anyio's `EndOfStream` so users don't have to import anyio.
-    """
+    """Raised after the send side is closed and the buffer is drained."""
 
 
 class ChannelClosed(Exception):
-    """Raised by `SendStream.send()` after the receive side has been closed.
-
-    The send-side has nowhere to deliver, so the call cannot make progress.
-    """
+    """Raised after the receive side has closed."""
 
 
 class ChannelInUse(Exception):
-    """Raised when a channel endpoint is used concurrently.
-
-    runlet channels are intended as single-producer / single-consumer wiring.
-    Passing the same endpoint to multiple active daemons is almost always a
-    wiring mistake; the in-process implementation catches concurrent blocking
-    ``send`` / ``receive`` calls and fails fast with this exception.
-    """
+    """Raised when a channel endpoint is used concurrently."""
 
 
 class WouldBlock(Exception):
-    """Raised by `SendStream.send_nowait()` / `ReceiveStream.receive_nowait()` when
-    the operation cannot complete immediately.
-
-    The async ``send``/``receive`` variants block instead of raising this. The
-    nowait variants exist as the enabling primitive for lossy backpressure
-    recipes (e.g. ``recipes.lossy.DropOldestSend``). See ADR 0001 for why
-    drop policies live at the recipe layer rather than on Channel itself.
-
-    Mirrors anyio's `WouldBlock` so users don't have to import anyio.
-    """
+    """Raised when a nowait operation cannot complete immediately."""
 
 
 class DaemonError(Exception):
-    """Wraps an exception that escaped a daemon's `run()`.
-
-    The supervisor attaches the failing daemon's name (``"daemon 'X' failed: ..."``)
-    so the failing unit is identifiable in the resulting ``ExceptionGroup``.
-    The original exception is preserved as ``__cause__``.
-    """
+    """Wraps an exception that escaped a daemon lifecycle method."""
 
 
 OnError = Literal["shutdown", "restart", "ignore"]
-"""Supervisor policy when a hosted daemon raises an uncaught exception.
-
-- ``"shutdown"`` (default): re-raise; anyio's TaskGroup cancels all siblings.
-- ``"restart"``: re-enter after ``on_start``/``run`` failures, with a
-  backoff governed by ``RestartPolicy``. Normal-path ``on_stop`` failures are
-  terminal unless ``on_error="ignore"``.
-- ``"ignore"``: log and let the daemon exit silently; siblings keep running.
-"""
+"""Supervisor policy for uncaught daemon exceptions."""

@@ -10,8 +10,7 @@ transition callbacks (`on_configure`, `on_activate`, `on_deactivate`,
 `on_cleanup`). The pitch is that operators get a uniform way to bring a node
 up in stages, pause it, and tear it down cleanly.
 
-In practice. by inspection of large ROS2 deployments and the user's own
-experience. the overwhelming majority of "lifecycle nodes" reduce to:
+In practice, most "lifecycle nodes" reduce to:
 
 - `configure` ≡ what you would have done in `__init__`,
 - `activate` ≡ what you would have done at the top of your main loop,
@@ -43,18 +42,17 @@ and free of the global "what state am I in" question.
 
 + The daemon authoring surface is minimal: one required method, two
   optional hooks.
-+ State transitions become regular dataflow. they go through the same
++ State transitions become regular dataflow. They go through the same
   `Channel` plumbing as everything else, with the same backpressure and
   deterministic-replay properties.
 + No lifecycle service to discover, version, or secure.
 - Users coming from ROS2 looking for "lifecycle node" will not find it.
-  The migration is "pass a command channel". promoted to
-  `runlet.recipes.*` if a clear pattern emerges.
+  The migration is "pass a command channel"; promote a recipe if a clear
+  pattern emerges.
 - Domain-specific pause/resume protocols won't share a common signature
-  across daemons. This is intentional. they shouldn't, because what
-  "pause" means is daemon-specific.
+  across daemons. What "pause" means is daemon-specific.
 
 ## Related
 
-- ADR 0003 (dual API). both class and decorator daemons inherit the same
+- ADR 0003 (dual API). Both class and decorator daemons inherit the same
   three-hook contract.
