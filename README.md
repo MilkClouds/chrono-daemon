@@ -3,7 +3,8 @@
 A small, general-purpose concurrency library on top of [anyio](https://anyio.readthedocs.io/).
 Four primitives, no Topic, no QoS, no parameter server — and a `SimClock`
 that lets you replay a 10-second multi-daemon scenario in microseconds of
-wall time, byte-deterministic, on both asyncio and trio.
+wall time. asyncio can pin byte-identical replay; trio is supported with
+the scheduler-order caveat documented in [`examples/README.md`](examples/README.md).
 
 ```python
 from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel

@@ -36,6 +36,7 @@ from runlet import (
     EndOfStream,
     ReceiveStream,
     SendStream,
+    WouldBlock,
     open_channel,
 )
 
@@ -101,7 +102,7 @@ async def batcher_loop(
 
         # Phase 1: drain anything already queued without waiting.
         while len(batch) < max_batch:
-            if not await _try_recv_nowait(incoming, batch):
+            if not _try_recv_nowait(incoming, batch):
                 break
 
         # Phase 2: if we still have headroom and a delay window is configured,
@@ -129,7 +130,7 @@ _CLOSED = object()
 _TIMEOUT = object()
 
 
-async def _try_recv_nowait(
+def _try_recv_nowait(
     incoming: ReceiveStream[Pending[Req, Resp]],
     batch: list[Pending[Req, Resp]],
 ) -> bool:
@@ -139,14 +140,11 @@ async def _try_recv_nowait(
     ``False`` on EOF too (caller drops out of the drain loop and dispatches
     what it has; the outer loop will hit EOF on the next ``receive``).
     """
-    with anyio.CancelScope() as scope:
-        scope.deadline = -1.0
-        try:
-            batch.append(await incoming.receive())
-            return True
-        except EndOfStream:
-            return False
-    return False  # cancel scope timed out — no item was ready
+    try:
+        batch.append(incoming.receive_nowait())
+        return True
+    except (WouldBlock, EndOfStream):
+        return False
 
 
 async def _recv_or_timeout(
@@ -186,6 +184,8 @@ async def _dispatch_batch(
     """Call ``forward`` on the batch and route responses (or the shared exception)."""
     try:
         responses = await forward([p.req for p in batch])
+        if len(responses) != len(batch):
+            raise RuntimeError(f"forward returned {len(responses)} responses for {len(batch)} requests")
     except Exception as exc:
         for p in batch:
             await p.reply.send.send(exc)

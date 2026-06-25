@@ -219,6 +219,33 @@ async def test_signal_stop_before_supervisor_entered_is_noop() -> None:
     sup.signal_stop()  # should not raise; no event yet, just a no-op
 
 
+async def test_on_stop_runs_after_daemon_self_cancels_scope() -> None:
+    """A daemon may cancel its own scope, catch that cancellation, and still clean up."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _SelfCancels(Daemon):
+        async def run(self, ctx: Context) -> None:
+            cancelled = anyio.get_cancelled_exc_class()
+            try:
+                ctx.cancel_scope.cancel()
+                await anyio.sleep(0)
+            except BaseException as exc:
+                if not isinstance(exc, cancelled):
+                    raise
+                log.append("cancelled")
+
+        async def on_stop(self, ctx: Context) -> None:
+            await anyio.sleep(0)
+            log.append("on_stop")
+
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_SelfCancels(), name="self-cancels")
+        await anyio.sleep(0)
+
+    assert log == ["cancelled", "on_stop"]
+
+
 async def test_on_stop_runs_on_shutdown_path() -> None:
     """A daemon raising under on_error='shutdown' still gets on_stop after on_start succeeded."""
     clock = SimClock()
@@ -283,6 +310,29 @@ async def test_on_stop_skipped_when_on_start_fails() -> None:
         sup.add(_StartFails())
 
     assert log == ["on_start-pre"]
+
+
+async def test_on_stop_failure_is_not_retried() -> None:
+    """If on_stop itself raises, the supervisor must not invoke it a second time."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _StopFails(Daemon):
+        async def run(self, ctx: Context) -> None:
+            log.append("run")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")
+            raise RuntimeError("cleanup failed")
+
+    sup = Supervisor(clock=clock, on_error="ignore")
+    async with sup:
+        sup.add(_StopFails(), name="stop-fails")
+
+    assert log == ["run", "on_stop"]
+    snap = sup.snapshot()
+    assert snap["stop-fails"].state == "stopped"
+    assert isinstance(snap["stop-fails"].last_error, RuntimeError)
 
 
 async def test_add_rejects_daemon_factory_with_clear_error() -> None:
@@ -351,6 +401,21 @@ async def test_snapshot_lists_pending_daemons_before_entry() -> None:
     assert all(h.restart_count == 0 for h in snap.values())
     assert all(h.last_error is None for h in snap.values())
     assert all(h.started_at is None for h in snap.values())
+
+
+def test_snapshot_with_default_wallclock_pending_before_entry_is_sync_safe() -> None:
+    """Pending-only diagnostics must not require an active async backend."""
+
+    class _Quick(Daemon):
+        async def run(self, ctx: Context) -> None:
+            pass
+
+    sup = Supervisor()
+    sup.add(_Quick(), name="queued")
+
+    snap = sup.snapshot()
+    assert snap["queued"].state == "starting"
+    assert snap["queued"].uptime is None
 
 
 async def test_snapshot_reports_running_state_and_uptime_under_simclock() -> None:
@@ -449,6 +514,22 @@ async def test_snapshot_failed_under_shutdown_policy() -> None:
 
 
 # -- wait_all_started ----------------------------------------------------------
+
+
+async def test_wait_all_started_before_entry_with_pending_daemons_returns() -> None:
+    """Pending registrations have no host task yet, so a pre-entry barrier is a no-op."""
+    clock = SimClock()
+
+    class _Quick(Daemon):
+        async def run(self, ctx: Context) -> None:
+            pass
+
+    sup = Supervisor(clock=clock)
+    sup.add(_Quick(), name="queued")
+
+    with anyio.move_on_after(0.1) as scope:
+        await sup.wait_all_started()
+    assert not scope.cancel_called, "wait_all_started should not wait on pending daemons"
 
 
 async def test_wait_all_started_blocks_until_on_start_completes() -> None:

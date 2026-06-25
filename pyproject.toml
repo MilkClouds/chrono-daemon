@@ -31,7 +31,7 @@ line-length = 119
 
 [tool.pyrefly]
 project-includes = ["src/", "tests/", "examples/"]
-search-path = ["src"]
+search-path = ["src", "examples"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/runlet"]

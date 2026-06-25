@@ -27,8 +27,8 @@ The mock implements the same three-stage cascade as #191 — slow planner
 (S2), fast policy (S1), high-rate motor dispenser (S0) — with every model
 forward replaced by `await ctx.clock.sleep(latency)` plus a deterministic
 toy computation. Under `SimClock` the whole 2-second scenario runs in
-microseconds of wall time, and the actuator log is byte-identical across
-runs and across both anyio backends.
+microseconds of wall time. On asyncio the actuator log is byte-identical
+across runs; trio support has the scheduler-order caveat below.
 
 What we wanted to check by building this:
 

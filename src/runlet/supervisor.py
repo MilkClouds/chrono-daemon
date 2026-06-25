@@ -320,10 +320,13 @@ class Supervisor:
 
         Snapshot semantics: waits for the daemons known at call time; daemons
         added afterwards aren't tracked by this call (call it again if you
-        need a fresh barrier). Safe to call before ``__aenter__`` (returns
-        immediately if nothing is registered yet) or after exit (events are
-        all set during host teardown, so this is a no-op).
+        need a fresh barrier). Safe to call before ``__aenter__`` (pending
+        registrations are not hosted yet, so this returns immediately) or
+        after exit (events are all set during host teardown, so this is a
+        no-op).
         """
+        if self._tg is None:
+            return
         # Snapshot the events so daemons added concurrently with this call
         # don't shift the barrier.
         events = [rec.started_event for rec in self._records.values()]
@@ -343,11 +346,13 @@ class Supervisor:
         each ``running`` daemon. Under :class:`runlet.SimClock`, this advances
         in lockstep with the rest of the simulation.
         """
-        now = self._clock.now()
+        now: float | None = None
         out: dict[str, DaemonHealth] = {}
         for name, rec in self._records.items():
             uptime: float | None
             if rec.started_at is not None and rec.state == "running":
+                if now is None:
+                    now = self._clock.now()
                 uptime = now - rec.started_at
             elif rec.started_at is not None:
                 # Daemon has stopped / failed / is restarting — uptime reflects
@@ -382,9 +387,11 @@ class Supervisor:
         Lifecycle guarantee: if ``on_start(ctx)`` returned successfully, ``on_stop(ctx)``
         is invoked exactly once before the host returns or re-raises — on the normal
         path, the Exception paths (shutdown/restart/ignore), and the forceful cancel
-        path. The cancel/shutdown/ignore paths run ``on_stop`` inside a shielded
-        scope bounded by ``self._finalize_timeout``; the restart path runs it inline
-        between attempts so each iteration sees ``on_start`` paired with ``on_stop``.
+        path. Normal cleanup runs outside the daemon's cancel scope. The
+        cancel/shutdown/ignore paths run ``on_stop`` inside a shielded scope
+        bounded by ``self._finalize_timeout``; the restart path runs it inline
+        between attempts so each iteration sees ``on_start`` paired with
+        ``on_stop``.
         """
         delay = self._restart.base
         retries = 0
@@ -405,6 +412,7 @@ class Supervisor:
                     stop_event=self._stop_event,
                 )
                 on_start_done = False
+                on_stop_started = False
                 record.state = "starting"
                 record.started_at = None
                 try:
@@ -415,13 +423,14 @@ class Supervisor:
                         record.started_at = self._clock.now()
                         record.started_event.set()
                         await daemon.run(ctx)
-                        await daemon.on_stop(ctx)
+                    on_stop_started = True
+                    await daemon.on_stop(ctx)
                     record.state = "stopped"
                     return
                 except BaseException as exc:
                     # If on_start succeeded, on_stop is owed regardless of how we exit.
                     # Run it under a shield so cancellation cannot cut cleanup short.
-                    if on_start_done:
+                    if on_start_done and not on_stop_started:
                         await self._run_on_stop_shielded(daemon, ctx)
                     if isinstance(exc, cancelled_cls):
                         # Cancellation isn't a failure of the daemon's own logic

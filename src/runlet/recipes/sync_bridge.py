@@ -99,6 +99,6 @@ def host_async_dispatcher(
             sup = sup_box[0]
             if sup is not None:
                 try:
-                    sup.signal_stop()
+                    portal.call(sup.signal_stop)
                 except Exception:
                     pass

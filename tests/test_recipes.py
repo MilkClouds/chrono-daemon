@@ -104,34 +104,25 @@ async def test_select_raises_endofstream_when_all_closed() -> None:
 
 async def test_batcher_dispatches_no_delay() -> None:
     """Without max_queue_delay, the batcher dispatches whatever is already queued."""
-    from runlet.recipes.batcher import Pending, batcher_loop, submit
+    from runlet.recipes.batcher import Pending, batcher_loop
 
     requests: Channel[Pending[int, int]] = open_channel(maxsize=8)
+    replies: list[Channel[int | Exception]] = [open_channel(maxsize=1) for _ in range(3)]
     seen_batches: list[list[int]] = []
 
     async def doubler(reqs: list[int]) -> list[int]:
         seen_batches.append(list(reqs))
         return [r * 2 for r in reqs]
 
+    for req, reply in zip([1, 2, 3], replies, strict=True):
+        await requests.send.send(Pending(req=req, reply=reply))
+    await requests.send.aclose()
+
     async with anyio.create_task_group() as tg:
         tg.start_soon(batcher_loop, requests.recv, doubler)
 
-        # Submit 3 requests, wait for replies, then close to terminate the loop.
-        async def caller(x: int, results: list[int]) -> None:
-            results.append(await submit(requests.send, x))
-
-        results: list[int] = []
-        async with anyio.create_task_group() as call_tg:
-            call_tg.start_soon(caller, 1, results)
-            call_tg.start_soon(caller, 2, results)
-            call_tg.start_soon(caller, 3, results)
-        assert sorted(results) == [2, 4, 6]
-        await requests.send.aclose()
-
-    # All requests handled. The batcher may have grouped them or not depending on
-    # scheduling, but every value was forwarded exactly once.
-    flat = [r for batch in seen_batches for r in batch]
-    assert sorted(flat) == [1, 2, 3]
+    assert seen_batches == [[1, 2, 3]]
+    assert [await reply.recv.receive() for reply in replies] == [2, 4, 6]
 
 
 async def test_batcher_timeout_window_under_simclock() -> None:
@@ -291,3 +282,20 @@ async def test_batcher_propagates_forward_exception_to_every_caller() -> None:
     assert len(errors) == 2
     assert all(isinstance(e, RuntimeError) for e in errors)
     assert all("boom" in str(e) for e in errors)
+
+
+async def test_batcher_propagates_response_count_mismatch_to_caller() -> None:
+    """If forward returns the wrong response count, callers get an error instead of hanging."""
+    from runlet.recipes.batcher import Pending, batcher_loop, submit
+
+    requests: Channel[Pending[int, int]] = open_channel(maxsize=8)
+
+    async def bad_forward(reqs: list[int]) -> list[int]:
+        assert reqs == [1]
+        return []
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(batcher_loop, requests.recv, bad_forward)
+        with pytest.raises(RuntimeError, match="forward returned 0 responses for 1 requests"):
+            await submit(requests.send, 1)
+        await requests.send.aclose()
