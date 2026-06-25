@@ -5,10 +5,8 @@ chose, and what the choice locks in and locks out.
 
 ## Format
 
-Nygard short. Four required sections. `Status`, `Context`, `Decision`,
-`Consequences` (split into `+` and `-`). and an optional `Related` block.
-Keep each ADR under ~100 lines: an ADR that needs more space is usually two
-decisions in a trenchcoat.
+Nygard short: `Status`, `Context`, `Decision`, `Consequences`, and optional
+`Related`. Keep each ADR under ~100 lines; split it if it needs more.
 
 ADRs are immutable once `Accepted`. To revise a decision, write a new ADR
 with `Status: Accepted; Supersedes 000X` and edit the old one to add

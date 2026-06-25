@@ -1,8 +1,4 @@
-"""Clock behavior: WallClock monotonicity + SimClock burst-step determinism.
-
-The canary test is :func:`test_simclock_burst_step_deterministic_order` — if it passes
-on both asyncio and trio backends, the rest of the system holds together.
-"""
+"""Clock behavior under WallClock and SimClock."""
 
 from __future__ import annotations
 
@@ -33,7 +29,6 @@ async def test_wallclock_now_is_monotonic() -> None:
 
 async def test_wallclock_sleep_zero_is_a_checkpoint() -> None:
     clock = WallClock()
-    # Should return promptly without raising.
     await clock.sleep(0)
     await clock.sleep(-1)
 
@@ -49,7 +44,6 @@ async def test_wallclock_wait_until_past_deadline_is_a_checkpoint() -> None:
 async def test_simclock_now_does_not_advance_without_advance() -> None:
     clock = SimClock(t0=10.0)
     assert clock.now() == 10.0
-    # Yielding control should not move the clock.
     await anyio.sleep(0)
     assert clock.now() == 10.0
 
@@ -67,7 +61,6 @@ async def test_simclock_burst_step_deterministic_order() -> None:
         tg.start_soon(sleeper, "A", 1.0)
         tg.start_soon(sleeper, "B", 2.0)
         tg.start_soon(sleeper, "C", 3.0)
-        # Let all sleepers register before we advance.
         await anyio.sleep(0)
         await clock.advance(5.0)
 
@@ -104,9 +97,7 @@ async def test_simclock_advance_stops_at_deadline() -> None:
         tg.start_soon(worker)
         await anyio.sleep(0)
         await clock.advance(0.5)
-        # Only 0.5s advanced; worker still sleeping; clock still at 0.5.
         assert clock.now() == 0.5
-        # Advance the rest.
         await clock.advance(1.5)
 
     assert clock.now() == 2.0
@@ -177,37 +168,26 @@ async def test_simclock_sleep_zero_is_a_checkpoint() -> None:
 
 
 async def test_simclock_every_skips_missed_ticks_like_wallclock() -> None:
-    """SimClock.every honors the protocol's monotonic-target contract:
-
-    one ``advance(dt)`` that overshoots several periods yields *one* tick at the
-    boundary, not a catch-up burst of every missed period.
-    """
+    """An overshooting advance yields one tick, not a catch-up burst."""
     clock = SimClock()
     seen: list[float] = []
 
     async def ticker() -> None:
         async for t in clock.every(0.1):
             seen.append(t)
-            # Bail after the first tick so we can inspect what fired.
             if len(seen) >= 1:
                 return
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(ticker)
         await anyio.sleep(0)
-        # Overshoot by 5 periods. A catch-up implementation would yield 5 times;
-        # a monotonic-target one yields once and then the loop ends.
         await clock.advance(0.5)
 
     assert seen == [0.1]
 
 
 async def test_simclock_sleep_removes_entry_on_cancellation() -> None:
-    """Cancelled sleepers must not accumulate in the heap.
-
-    Without cleanup, repeated cancel-and-retry under SimClock would grow
-    ``_waiters`` without bound.
-    """
+    """Cancelled sleepers must not accumulate in the heap."""
     import anyio.lowlevel
 
     clock = SimClock()
@@ -220,8 +200,6 @@ async def test_simclock_sleep_removes_entry_on_cancellation() -> None:
     async with anyio.create_task_group() as tg:
         tg.start_soon(sleeper)
         await started.wait()
-        # Let the sleeper reach its await on the internal anyio.Event so the
-        # heap entry is registered.
         for _ in range(5):
             await anyio.lowlevel.checkpoint()
         assert len(clock._waiters) == 1
@@ -231,9 +209,7 @@ async def test_simclock_sleep_removes_entry_on_cancellation() -> None:
 
 
 async def test_simclock_mid_heap_cancellation_cleared_by_advance() -> None:
-    """A cancelled entry sitting in the middle of the heap is dropped on the
-    next ``advance_to`` pop sequence (lazy-delete invariant).
-    """
+    """A cancelled mid-heap entry is skipped during advance."""
     import anyio.lowlevel
 
     clock = SimClock()
@@ -267,28 +243,18 @@ async def test_simclock_mid_heap_cancellation_cleared_by_advance() -> None:
         await started_c.wait()
         for _ in range(5):
             await anyio.lowlevel.checkpoint()
-        # All three registered; cancel B (middle entry).
         assert b_scope is not None
         b_scope.cancel()
-        # Now advance — the cancelled B should be skipped on pop, A wakes at 1.0,
-        # C at 3.0, but the clock does not jump to B's deadline of 2.0.
         await clock.advance(5.0)
 
     assert "A-woke" in log
     assert "C-woke" in log
     assert "B-cancelled" in log
-    # No live waiters remain.
     assert all(w.cancelled for w in clock._waiters)
 
 
 async def test_simclock_advance_breaks_early_when_no_followup_sleep() -> None:
-    """The empty-heap polling path breaks as soon as a new in-range sleeper
-    appears, instead of always burning the full ``settle_rounds`` budget.
-
-    We rely on a black-box check: that the canary determinism holds even when
-    a woken task does not register a follow-up sleep. (Performance is exercised
-    by the canary's existing per-backend timing budget.)
-    """
+    """Empty-heap polling still catches later in-range sleepers."""
     clock = SimClock()
     woke: list[str] = []
 

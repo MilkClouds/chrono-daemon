@@ -1,10 +1,7 @@
 # runlet
 
-A small, general-purpose concurrency library on top of [anyio](https://anyio.readthedocs.io/).
-Four primitives, no Topic, no QoS, no parameter server, and a `SimClock`
-that lets you replay a 10-second multi-daemon scenario in microseconds of
-wall time. asyncio can pin byte-identical replay; trio is supported with
-the scheduler-order caveat documented in [`examples/README.md`](examples/README.md).
+A small concurrency library on top of [anyio](https://anyio.readthedocs.io/):
+four primitives, explicit wiring, and a `SimClock` for deterministic replay.
 
 ```python
 from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel
@@ -39,8 +36,7 @@ async def main() -> None:
 | **`Daemon`** | long-running async unit; `on_start` / `run` / `on_stop` hooks. Use a subclass or the `@daemon` decorator |
 | **`Supervisor`** | `async with Supervisor(...)` structured-concurrency root; hosts daemons, dispatches errors (`shutdown` / `restart` / `ignore`) |
 
-See [`docs/concepts.md`](docs/concepts.md) for what each one does in detail
-and how they compose.
+See [`docs/concepts.md`](docs/concepts.md) for details.
 
 ## When to use, when not to
 
@@ -52,10 +48,8 @@ and how they compose.
 | A small Python codebase you can read end-to-end | continuous-time numerical simulation (use [Drake](https://github.com/RobotLocomotion/drake)) |
 | Zero runtime dependencies beyond `anyio` | a ROS replacement (use [dora-rs](https://github.com/dora-rs/dora) or ROS2) |
 
-The design background surveys comparable projects such as dora-rs, Apollo
-CyberRT, HORUS, Drake, and Holoscan. runlet's niche is the intersection of
-"small, pure Python" and "deterministic burst replay first-class"; everything
-else is deliberately not-runlet.
+runlet's niche is small, pure Python deterministic replay. Everything else is
+deliberately out of scope.
 
 ## Install / dev
 
@@ -80,8 +74,8 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
   Source in `src/runlet/recipes/`.
 - [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.
-- [`examples/system_stack_mock.py`](examples/system_stack_mock.py): full
-  multi-rate System 2/1/0 mock pipeline, with an ergonomics post-mortem in
+- [`examples/system_stack_mock.py`](examples/system_stack_mock.py): multi-rate
+  System 2/1/0 mock pipeline, with notes in
   [`docs/archive/system-stack-postmortem.md`](docs/archive/system-stack-postmortem.md).
 
 ## Status

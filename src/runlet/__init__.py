@@ -1,4 +1,4 @@
-"""runlet — tiny anyio-based concurrency primitives.
+"""Tiny anyio-based concurrency primitives.
 
 Public surface:
 

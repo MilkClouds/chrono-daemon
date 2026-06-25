@@ -2,7 +2,7 @@
 
 runlet is four small primitives on top of `anyio`. Everything else, including
 fanout, batching, multi-channel waits, and sync↔async bridging, is built from
-these four, with examples in `recipes/`.
+these four.
 
 ## The four primitives
 
@@ -14,9 +14,9 @@ is single producer / single consumer: one daemon owns `send`, one daemon owns
 raises `ChannelInUse`. Closing the send side propagates `EndOfStream` to the
 receiver after the buffer drains.
 
-`Channel` is the only inter-daemon communication primitive in runlet. There
-is no `Topic`, no broadcast, no services, no RPC, no parameter system. The
-reasoning is in ADR 0001 and the single-owner refinement is in ADR 0010.
+`Channel` is the only inter-daemon communication primitive in runlet. There is
+no `Topic`, broadcast, service, RPC, or parameter system. See ADR 0001 and ADR
+0010.
 
 When topology gets more complex, keep each edge SPSC and add a named routing
 daemon. `runlet.recipes.merge` covers N:1 fan-in, `load_balance` covers 1:N
@@ -31,10 +31,8 @@ A small protocol with `now()`, `async sleep(seconds)`,
 - `WallClock` uses `time.monotonic()` for `now()` and `anyio.sleep` for
   sleeping. Use it in production.
 - `SimClock` is a deterministic virtual clock. Time only moves when a driver
-  task calls `await clock.advance(dt)` (or `advance_to(t)`). Sleepers register
-  an absolute deadline, the driver pops them in deadline order, and the
-  configurable `settle_rounds` checkpoint budget between wakes lets woken
-  tasks register follow-up sleeps before the next heap inspection.
+  task calls `advance(dt)` or `advance_to(t)`. Sleepers wake in deadline order,
+  with a settle budget for follow-up sleeps; see ADR 0002.
 
 Daemons must reach for `ctx.clock.sleep(...)`, not `anyio.sleep(...)`
 directly, or `SimClock` cannot intercept time. The reasoning is in ADR 0002.
@@ -53,11 +51,8 @@ We do not ship lifecycle states beyond these three (no `configured`,
 
 The structured-concurrency root. `async with Supervisor(clock=...) as sup:`
 wraps an `anyio.create_task_group`. Inside the block you `sup.add(daemon)` or
-`sup.spawn(async_fn, *args)`. `sup.add` raises `TypeError` if you pass a
-non-`Daemon`; the most common mistake, passing the `@daemon` factory instead
-of calling it, gets a dedicated error message. Daemon names key diagnostics
-such as `snapshot()`, so duplicate names raise `ValueError`. Each hosted
-daemon gets its own `Context` with its own cancel scope and a child logger.
+`sup.spawn(async_fn, *args)`. Each daemon gets its own `Context`, cancel scope,
+and child logger. Duplicate names fail because they key diagnostics.
 
 On uncaught exception, `Supervisor.on_error` chooses:
 
@@ -67,8 +62,8 @@ On uncaught exception, `Supervisor.on_error` chooses:
 - `"restart"`: sleep on `ctx.clock` per `RestartPolicy` (exponential
   backoff), then re-enter after `on_start` or `run` failures. A normal-path
   `on_stop` cleanup failure is terminal unless `on_error="ignore"`, because
-  retrying cleanup can duplicate side effects. Because backoff goes through
-  `ctx.clock.sleep`, restart timing is deterministic under `SimClock`.
+  retrying cleanup can duplicate side effects. Backoff uses `ctx.clock`, so
+  restart timing is deterministic under `SimClock`.
 - `"ignore"`: log and let the daemon exit; siblings keep running.
 
 Shutdown surface (ADR 0009):
@@ -79,10 +74,10 @@ Shutdown surface (ADR 0009):
   runs on the standard return path. Safe to call from inside a daemon.
 - `await sup.stop(grace, finalize_timeout)`: async. Signals stop, waits
   up to `grace` wall-clock seconds for daemons to exit, then force-cancels
-  any still running. Even on the force-cancel path, each daemon's
-  `on_stop` is invoked best-effort inside a shielded scope bounded by
-  `finalize_timeout`. If `on_start` succeeded, `on_stop` is guaranteed on
-  every exit path (normal, shutdown, restart, ignore, cancel).
+  any still running. Force-cancel still gives `on_stop` a shielded
+  best-effort cleanup bounded by `finalize_timeout`. If `on_start` succeeded,
+  `on_stop` is attempted on normal exit, failure, restart, ignore, and
+  cancellation paths.
 
 Leaving the `async with Supervisor(...)` block does not itself signal a
 stop. If a hosted daemon is designed to run forever, the owner task must call
@@ -110,15 +105,12 @@ Supervisor                       (one per process, typically)
 └── ...
 ```
 
-Wiring is explicit: every channel and every consumer is a named reference in
-your code, not a runtime-discovered topic name. That's the deliberate tradeoff
-recorded in ADR 0001.
+Wiring is explicit: every channel and consumer is a named reference, not a
+runtime-discovered topic name.
 
-Supervisors compose recursively. A daemon may itself open an inner
-`async with Supervisor(...)` and host its own sub-pipeline with its own
-`SimClock`. `examples/system_stack_multi_session.py` uses this pattern for
-per-session isolation. Each session is a daemon on the outer supervisor
-that nests its own inner supervisor + clock. No new primitive needed.
+Supervisors compose recursively. A daemon may open an inner
+`async with Supervisor(...)` with its own `SimClock`; see
+`examples/system_stack_multi_session.py`.
 
 ## Invariants you can rely on
 
@@ -147,6 +139,5 @@ bug, not a tuning knob:
 - Lifecycle states beyond `on_start`/`run`/`on_stop`.
 - Dependency on anything other than `anyio` (ADR 0007).
 
-If you find yourself wanting one of these, check `docs/recipes.md` (and
-its source in `src/runlet/recipes/`) and `roadmap.md` first; the relevant
-ADR explains the reasoning if you want to push back on the decision.
+If you want one of these, check `docs/recipes.md`, `docs/roadmap.md`, and the
+relevant ADR first.

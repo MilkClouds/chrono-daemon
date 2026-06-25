@@ -1,10 +1,4 @@
-"""Supervisor: shutdown propagation, restart with backoff, max_retries, cancel scope per daemon.
-
-Also covers the diagnostics surface (duplicate-name rejection, DaemonError
-wrapping that exposes the failing daemon's name on the ExceptionGroup leaf)
-and the stop-signaling surface (signal_stop, stop(grace), shielded on_stop
-on the force-cancel path).
-"""
+"""Supervisor lifecycle, error policy, diagnostics, and stop behavior."""
 
 from __future__ import annotations
 
@@ -42,11 +36,7 @@ class _Idle(Daemon):
 
 
 async def test_shutdown_on_error_cancels_siblings() -> None:
-    """Default on_error='shutdown': one daemon failing tears down the whole group.
-
-    The failing daemon's name is attached to a ``DaemonError`` leaf in the
-    resulting ExceptionGroup, with the original exception as ``__cause__``.
-    """
+    """Default on_error='shutdown' tears down siblings and names the failure."""
     stop_log: list[str] = []
     clock = SimClock()
 
@@ -58,11 +48,9 @@ async def test_shutdown_on_error_cancels_siblings() -> None:
             await anyio.sleep(0)  # let daemons get registered
 
     flat = list(_flatten(excinfo.value))
-    # DaemonError wraps the failing daemon's exception with the daemon's name.
     daemon_errs = [e for e in flat if isinstance(e, DaemonError)]
     assert len(daemon_errs) == 1
     assert "failing-X" in str(daemon_errs[0])
-    # Original RuntimeError remains accessible via __cause__.
     assert isinstance(daemon_errs[0].__cause__, RuntimeError)
     assert "boom" in str(daemon_errs[0].__cause__)
 
@@ -109,7 +97,6 @@ async def test_restart_with_backoff_under_simclock() -> None:
     async with Supervisor(clock=clock, on_error="restart", restart=policy) as sup:
         sup.add(failing)
         await anyio.sleep(0)
-        # Total backoff to drain: 0.1 + 0.2 + 0.4 = 0.7. Advance plenty.
         await clock.advance(2.0)
 
     assert failing.attempts == 4
@@ -130,9 +117,7 @@ async def test_restart_respects_max_retries() -> None:
     flat = list(_flatten(excinfo.value))
     daemon_errs = [e for e in flat if isinstance(e, DaemonError)]
     assert len(daemon_errs) >= 1
-    # Original RuntimeError is preserved on __cause__.
     assert any(isinstance(e.__cause__, RuntimeError) for e in daemon_errs)
-    # initial attempt + max_retries = 1 + 2 = 3 total tries.
     assert failing.attempts == 3
 
 
@@ -158,7 +143,6 @@ async def test_signal_stop_lets_cooperative_daemons_exit() -> None:
         await anyio.sleep(0)
         await clock.advance(0.05)
         sup.signal_stop()
-        # Advance further so the next sleep returns and the daemon checks stopping.
         await clock.advance(0.05)
 
     assert log == ["started", "noticed-stopping", "on_stop"]
@@ -187,7 +171,6 @@ async def test_stop_force_cancels_blocked_daemons() -> None:
 
     assert "running" in seen
     assert "after-sleep" not in seen
-    # Forceful path still runs on_stop in a shielded scope.
     assert "on_stop" in seen
 
 
@@ -379,11 +362,7 @@ async def test_add_rejects_non_daemon_with_clear_error() -> None:
 
 
 async def test_each_daemon_gets_its_own_cancel_scope() -> None:
-    """Per-daemon scope: concurrent daemons under one Supervisor must see distinct ``cancel_scope`` objects.
-
-    We hold references to both scopes while both daemons are still alive so the
-    comparison is not subject to id() reuse after one of them exits and is GC'd.
-    """
+    """Concurrent daemons get distinct cancel scopes."""
     clock = SimClock()
     scopes: list[anyio.CancelScope] = []
 
@@ -455,7 +434,6 @@ async def test_snapshot_reports_running_state_and_uptime_under_simclock() -> Non
     async with Supervisor(clock=clock) as sup:
         sup.add(_Sleeper(), name="sleeper")
         await in_run.wait()
-        # Take a snapshot immediately after on_start.
         snap = sup.snapshot()
         assert snap["sleeper"].state == "running"
         assert snap["sleeper"].started_at == 0.0
@@ -513,7 +491,6 @@ async def test_snapshot_restart_count_increments_through_backoff() -> None:
         await clock.advance(1.0)
 
     snap = sup.snapshot()
-    # The final iteration succeeded; restart_count reflects the two failures.
     assert snap["flapper"].restart_count == 2
     assert snap["flapper"].state == "stopped"
     assert isinstance(snap["flapper"].last_error, RuntimeError)
@@ -559,16 +536,12 @@ async def test_wait_all_started_before_entry_with_pending_daemons_returns() -> N
 
 
 async def test_wait_all_started_blocks_until_on_start_completes() -> None:
-    """Driver waits past on_start before advancing — daemons all see their
-    own ctx.clock.sleep registered before time moves.
-    """
+    """wait_all_started blocks past every current daemon's on_start."""
     clock = SimClock()
     started_times: list[float] = []
 
     class _SlowStart(Daemon):
         async def on_start(self, ctx: Context) -> None:
-            # Pretend setup is slow — but we only need the *callsite* of
-            # wait_all_started to wait until this returns.
             pass
 
         async def run(self, ctx: Context) -> None:
@@ -579,22 +552,16 @@ async def test_wait_all_started_blocks_until_on_start_completes() -> None:
         for i in range(5):
             sup.add(_SlowStart(), name=f"d{i}")
         await sup.wait_all_started()
-        # All daemons are past on_start. Their run() should have appended
-        # their start time before we advance.
         snap = sup.snapshot()
         assert all(h.state == "running" for h in snap.values()), snap
         await clock.advance(2.0)
 
     assert len(started_times) == 5
-    # All started at t=0.
     assert all(t == 0.0 for t in started_times)
 
 
 async def test_wait_all_started_returns_immediately_for_failed_on_start() -> None:
-    """If a daemon's on_start raises (so the host exits without ever marking
-    started=True), wait_all_started must NOT hang — the host's finally
-    unblocks the event.
-    """
+    """wait_all_started does not hang after on_start failure."""
     clock = SimClock()
 
     class _StartCrashes(Daemon):
@@ -606,7 +573,6 @@ async def test_wait_all_started_returns_immediately_for_failed_on_start() -> Non
 
     async with Supervisor(clock=clock, on_error="ignore") as sup:
         sup.add(_StartCrashes(), name="crasher")
-        # Without the finally guard, this would hang forever.
         with anyio.move_on_after(1.0) as scope:
             await sup.wait_all_started()
         assert not scope.cancel_called, "wait_all_started should have returned"
@@ -630,8 +596,6 @@ async def test_wait_all_started_is_a_snapshot_barrier() -> None:
     async with Supervisor(clock=clock) as sup:
         sup.add(_BlocksOnEvent(in_run), name="first")
         await sup.wait_all_started()
-        # Adding a new daemon now should not retroactively unstart the
-        # barrier we already passed.
         snap = sup.snapshot()
         assert snap["first"].state == "running"
         await sup.stop(grace=0.0)
