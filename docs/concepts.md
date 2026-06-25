@@ -18,6 +18,11 @@ receiver after the buffer drains.
 is no `Topic`, no broadcast, no services, no RPC, no parameter system. The
 reasoning is in ADR 0001 and the single-owner refinement is in ADR 0010.
 
+When topology gets more complex, keep each edge SPSC and add a named routing
+daemon. `runlet.recipes.merge` covers N:1 fan-in, `load_balance` covers 1:N
+competing-consumer routing, `worker_pool` covers ready-worker dispatch, and
+`fanout.tee` covers broadcast.
+
 ### `Clock`
 
 A small protocol with `now()`, `async sleep(seconds)`,

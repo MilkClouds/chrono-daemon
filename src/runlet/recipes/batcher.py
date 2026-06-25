@@ -42,6 +42,7 @@ from runlet import (
     WouldBlock,
     open_channel,
 )
+from runlet.recipes._routing import send_when_ready
 
 Req = TypeVar("Req")
 Resp = TypeVar("Resp")
@@ -210,12 +211,7 @@ async def submit(
     """
     reply: Channel[Resp | Exception] = open_channel(maxsize=1)
     pending = Pending(req=req, reply=reply)
-    while True:
-        try:
-            out.send_nowait(pending)
-            break
-        except WouldBlock:
-            await anyio.lowlevel.checkpoint()
+    await send_when_ready(out, pending)
     result = await reply.recv.receive()
     if isinstance(result, Exception):
         raise result

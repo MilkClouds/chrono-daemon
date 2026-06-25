@@ -1,9 +1,9 @@
 """Patterns kept out of the core surface but shipped as importable helpers.
 
-These modules implement composable patterns — fanout, batcher, select,
-sync-bridge — that are common enough to want a tested reference but
-specialized enough that we keep them outside the four-primitive core
-(``Channel``, ``Clock``, ``Daemon``, ``Supervisor``). They live under
+These modules implement composable patterns: fanout, fan-in, load balancing,
+worker pools, batcher, select, and sync-bridge. They are common enough to want
+a tested reference but specialized enough to keep outside the four-primitive
+core (``Channel``, ``Clock``, ``Daemon``, ``Supervisor``). They live under
 ``runlet.recipes`` rather than the top-level namespace as a signal:
 
 - The core primitives in ``runlet`` follow strict semver: breaking changes
@@ -15,6 +15,9 @@ specialized enough that we keep them outside the four-primitive core
 Use them by importing directly:
 
     from runlet.recipes.fanout import tee
+    from runlet.recipes.merge import merge
+    from runlet.recipes.load_balance import load_balance
+    from runlet.recipes.worker_pool import worker_pool
     from runlet.recipes.select import select
     from runlet.recipes.batcher import batcher_loop, submit
     from runlet.recipes.cooperative_every import cooperative_every

@@ -17,7 +17,9 @@ ship.
   (ADR 0006), so adapters such as `MultiprocessChannel`, `ZmqChannel`, or
   `ZenohChannel` can land without breaking the top-level API. The blockers
   are dependency policy, serialization policy, and how much transport behavior
-  can preserve the SPSC fail-fast contract from ADR 0010.
+  can preserve the SPSC fail-fast contract from ADR 0010. The in-process
+  `merge`, `load_balance`, and `worker_pool` recipes define the topology
+  semantics those transports should try to preserve.
 - **Test fixtures.** A `pytest` plugin that gives the user
   `async def test_foo(supervisor: Supervisor, sim_clock: SimClock): ...`
   with the boilerplate of "enter supervisor, advance clock, exit cleanly"
@@ -25,10 +27,6 @@ ship.
 
 ## Maybe, Not Committed
 
-- **Deliberate fan-in / worker-pool recipe.** Core channels are SPSC
-  (ADR 0010). If users need competing consumers or multiple producers, that
-  should arrive as an explicit recipe or factory with a clear close/error
-  policy, not by making endpoint sharing accidental.
 - **`select(*receivers)` as a first-class API** instead of a recipe.
   Requires deciding on a cancellation semantic for the losers.
 - **Strict-rate `every(mode="strict")`.** Today's `every` skips ticks when

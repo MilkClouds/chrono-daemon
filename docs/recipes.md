@@ -25,6 +25,18 @@ The stability contract is restated at the top of
   [`fanout.py`](../src/runlet/recipes/fanout.py). 1:N broadcast with
   per-destination backpressure. Replaces the pub/sub `Topic` we chose not
   to ship (ADR 0001).
+- **`runlet.recipes.merge.merge(sources, dest)`**:
+  [`merge.py`](../src/runlet/recipes/merge.py). N:1 fan-in. Each producer owns
+  its own source channel; the merge daemon owns the output send endpoint and
+  forwards items with deliberate fan-in.
+- **`runlet.recipes.load_balance.load_balance(source, dests)`**:
+  [`load_balance.py`](../src/runlet/recipes/load_balance.py). 1:N
+  competing-consumer routing. Each item goes to exactly one destination in
+  round-robin order.
+- **`runlet.recipes.worker_pool.worker_pool(incoming, results, handle)`**:
+  [`worker_pool.py`](../src/runlet/recipes/worker_pool.py). Ready-worker job
+  dispatch built from private SPSC worker channels. Handler returns and
+  exceptions are sent to a result stream.
 - **`runlet.recipes.select.select(*receivers)`**:
   [`select.py`](../src/runlet/recipes/select.py). Wait on the first of
   several receivers to be ready. The Go `select` equivalent. anyio does
