@@ -75,8 +75,9 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 - [`docs/adr/`](docs/adr/): why each decision looks the way it does
   (Topic-less, on-error-shutdown by default, anyio-only, …).
 - [`docs/recipes.md`](docs/recipes.md): patterns kept off the core
-  surface but importable under `runlet.recipes.*`: fanout, batcher,
-  select, sync↔async bridge. Source in `src/runlet/recipes/`.
+  surface but importable under `runlet.recipes.*`: fanout, fan-in,
+  load balancing, worker pools, batcher, select, sync↔async bridge.
+  Source in `src/runlet/recipes/`.
 - [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.
 - [`examples/system_stack_mock.py`](examples/system_stack_mock.py): full

@@ -14,7 +14,10 @@ import pytest
 
 from runlet import Channel, EndOfStream, SendStream, SimClock, open_channel
 from runlet.recipes.fanout import tee
+from runlet.recipes.load_balance import load_balance
+from runlet.recipes.merge import merge
 from runlet.recipes.select import select
+from runlet.recipes.worker_pool import worker_pool
 
 pytestmark = pytest.mark.anyio
 
@@ -26,7 +29,10 @@ async def test_recipes_namespace_imports() -> None:
         cooperative_every,
         fanout,
         latest,
+        load_balance,
+        merge,
         sync_bridge,
+        worker_pool,
     )
 
 
@@ -97,6 +103,214 @@ async def test_select_raises_endofstream_when_all_closed() -> None:
     await ch.send.aclose()
     with pytest.raises(EndOfStream):
         await select(ch.recv)
+
+
+# -- topology recipes --------------------------------------------------------
+
+
+async def test_merge_fans_in_multiple_sources_without_endpoint_sharing() -> None:
+    src_a: Channel[tuple[str, int]] = open_channel(maxsize=4)
+    src_b: Channel[tuple[str, int]] = open_channel(maxsize=4)
+    dest: Channel[tuple[str, int]] = open_channel(maxsize=1)
+    received: list[tuple[str, int]] = []
+
+    async def produce(ch: Channel[tuple[str, int]], name: str) -> None:
+        for i in range(3):
+            await ch.send.send((name, i))
+        await ch.send.aclose()
+
+    async def drain() -> None:
+        async for item in dest.recv:
+            received.append(item)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(merge, [src_a.recv, src_b.recv], dest.send)
+        tg.start_soon(drain)
+        tg.start_soon(produce, src_a, "a")
+        tg.start_soon(produce, src_b, "b")
+
+    assert sorted(received) == [("a", 0), ("a", 1), ("a", 2), ("b", 0), ("b", 1), ("b", 2)]
+
+
+async def test_load_balance_round_robins_to_destinations() -> None:
+    source: Channel[int] = open_channel(maxsize=8)
+    dests: list[Channel[int]] = [open_channel(maxsize=2) for _ in range(3)]
+    buckets: list[list[int]] = [[], [], []]
+
+    async def produce() -> None:
+        for i in range(6):
+            await source.send.send(i)
+        await source.send.aclose()
+
+    async def drain(ch: Channel[int], bucket: list[int]) -> None:
+        async for item in ch.recv:
+            bucket.append(item)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(load_balance, source.recv, [ch.send for ch in dests])
+        tg.start_soon(produce)
+        for ch, bucket in zip(dests, buckets, strict=True):
+            tg.start_soon(drain, ch, bucket)
+
+    assert buckets == [[0, 3], [1, 4], [2, 5]]
+
+
+async def test_worker_pool_dispatches_to_ready_workers() -> None:
+    incoming: Channel[int] = open_channel(maxsize=8)
+    results: Channel[int | Exception] = open_channel(maxsize=8)
+    running = 0
+    peak_running = 0
+
+    async def handle(item: int) -> int:
+        nonlocal running, peak_running
+        running += 1
+        peak_running = max(peak_running, running)
+        await anyio.sleep(0.01)
+        running -= 1
+        return item * 10
+
+    async def produce() -> None:
+        for i in range(6):
+            await incoming.send.send(i)
+        await incoming.send.aclose()
+
+    async def run_pool() -> None:
+        await worker_pool(incoming.recv, results.send, handle, workers=3)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run_pool)
+        tg.start_soon(produce)
+
+    collected: list[int | Exception] = []
+    async for item in results.recv:
+        collected.append(item)
+
+    values = [item for item in collected if isinstance(item, int)]
+    assert sorted(values) == [0, 10, 20, 30, 40, 50]
+    assert peak_running > 1
+
+
+async def test_worker_pool_sends_handler_exceptions_as_results() -> None:
+    incoming: Channel[int] = open_channel(maxsize=4)
+    results: Channel[int | Exception] = open_channel(maxsize=4)
+
+    async def handle(item: int) -> int:
+        if item == 2:
+            raise RuntimeError("bad job")
+        return item
+
+    await incoming.send.send(1)
+    await incoming.send.send(2)
+    await incoming.send.aclose()
+
+    async def run_pool() -> None:
+        await worker_pool(incoming.recv, results.send, handle, workers=2)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run_pool)
+
+    collected: list[int | Exception] = []
+    async for item in results.recv:
+        collected.append(item)
+
+    assert 1 in collected
+    errors = [item for item in collected if isinstance(item, RuntimeError)]
+    assert len(errors) == 1
+    assert str(errors[0]) == "bad job"
+
+
+async def test_merge_keeps_dest_open_when_close_dest_false() -> None:
+    src: Channel[int] = open_channel(maxsize=4)
+    dest: Channel[int] = open_channel(maxsize=4)
+
+    async def produce() -> None:
+        for i in range(3):
+            await src.send.send(i)
+        await src.send.aclose()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(produce)
+        await merge([src.recv], dest.send, close_dest=False)
+
+    # close_dest=False leaves dest.send open for the caller to keep using.
+    await dest.send.send(99)
+    await dest.send.aclose()
+    received = [item async for item in dest.recv]
+    assert received == [0, 1, 2, 99]
+
+
+async def test_load_balance_keeps_dests_open_when_close_dests_false() -> None:
+    source: Channel[int] = open_channel(maxsize=4)
+    dests: list[Channel[int]] = [open_channel(maxsize=4) for _ in range(2)]
+
+    async def produce() -> None:
+        for i in range(4):
+            await source.send.send(i)
+        await source.send.aclose()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(produce)
+        await load_balance(source.recv, [ch.send for ch in dests], close_dests=False)
+
+    # close_dests=False leaves every destination open; append a sentinel, then drain.
+    buckets: list[list[int]] = []
+    for ch in dests:
+        await ch.send.send(-1)
+        await ch.send.aclose()
+        buckets.append([item async for item in ch.recv])
+    assert buckets == [[0, 2, -1], [1, 3, -1]]
+
+
+async def test_worker_pool_keeps_results_open_with_worker_buffer() -> None:
+    incoming: Channel[int] = open_channel(maxsize=4)
+    results: Channel[int | Exception] = open_channel(maxsize=4)
+    collected: list[int | Exception] = []
+
+    async def handle(item: int) -> int:
+        return item * 2
+
+    async def produce() -> None:
+        for i in range(3):
+            await incoming.send.send(i)
+        await incoming.send.aclose()
+
+    async def drain_three() -> None:
+        for _ in range(3):
+            collected.append(await results.recv.receive())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(produce)
+        tg.start_soon(drain_three)
+        await worker_pool(
+            incoming.recv,
+            results.send,
+            handle,
+            workers=2,
+            worker_buffer=1,
+            close_results=False,
+        )
+
+    # close_results=False leaves results.send open after the pool returns.
+    await results.send.send(-1)
+    await results.send.aclose()
+    assert await results.recv.receive() == -1
+    assert sorted(v for v in collected if isinstance(v, int)) == [0, 2, 4]
+
+
+async def test_topology_recipes_validate_non_empty_shapes() -> None:
+    ch: Channel[int] = open_channel()
+    results: Channel[int | Exception] = open_channel()
+
+    with pytest.raises(ValueError, match="at least one source"):
+        await merge([], ch.send)
+    with pytest.raises(ValueError, match="at least one destination"):
+        await load_balance(ch.recv, [])
+    with pytest.raises(ValueError, match="workers"):
+        await worker_pool(ch.recv, results.send, _identity_int, workers=0)
+
+
+async def _identity_int(x: int) -> int:
+    return x
 
 
 # -- batcher ---------------------------------------------------------------
