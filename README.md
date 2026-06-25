@@ -1,7 +1,18 @@
 # runlet
 
-A small concurrency library on top of [anyio](https://anyio.readthedocs.io/):
-four primitives, explicit wiring, and a `SimClock` for deterministic replay.
+runlet is a small Python library for long-running async components whose time
+can be replayed deterministically. It wraps
+[anyio](https://anyio.readthedocs.io/) with four primitives:
+
+- `Channel[T]`: typed single-producer / single-consumer queues.
+- `Clock`: real time with `WallClock`, virtual time with `SimClock`.
+- `Daemon`: a lifecycle unit with `on_start`, `run`, and `on_stop`.
+- `Supervisor`: a structured-concurrency root for hosting daemons.
+
+The practical payoff is simple: production daemons sleep on `ctx.clock`; tests
+swap in `SimClock` and advance seconds of work without waiting for wall time.
+
+## Quick Example
 
 ```python
 from runlet import Channel, Context, SimClock, Supervisor, daemon, open_channel
@@ -24,10 +35,21 @@ async def main() -> None:
     async with Supervisor(clock=clock) as sup:
         sup.add(producer(ch))
         sup.add(consumer(ch))
-        await clock.advance(1.5)   # burst-replay 1.5 s of work in 0 wall-time
+        await clock.advance(1.5)  # replay 1.5 s of work immediately
 ```
 
-## The four primitives
+## Why Use It
+
+- Time-dependent async code is testable without sleeps, polling, or fake
+  task schedulers.
+- Wiring is explicit. Every edge is a named SPSC channel, so ownership and
+  backpressure stay visible.
+- Lifecycle behavior is structured. Daemons get startup, shutdown, logging,
+  cancellation, and error policy in one place.
+- The runtime surface is small: pure Python, `anyio` underneath, and no
+  runtime dependency beyond `anyio`.
+
+## Core API
 
 | | What it is |
 |---|---|
@@ -38,18 +60,15 @@ async def main() -> None:
 
 See [`docs/concepts.md`](docs/concepts.md) for details.
 
-## When to use, when not to
+## Scope
 
-| Use runlet if you want | Don't use runlet if you want |
-|---|---|
-| Multi-daemon async code with explicit wiring | dynamic topic discovery / pub-sub broadcast |
-| Deterministic burst-replay of time-dependent code | a CLI / runtime / launcher |
-| `anyio` underneath; both asyncio and trio supported | a GPU-aware streaming engine (use [Holoscan](https://github.com/nvidia-holoscan/holoscan-sdk)) |
-| A small Python codebase you can read end-to-end | continuous-time numerical simulation (use [Drake](https://github.com/RobotLocomotion/drake)) |
-| Zero runtime dependencies beyond `anyio` | a ROS replacement (use [dora-rs](https://github.com/dora-rs/dora) or ROS2) |
+runlet is for in-process async systems where explicit wiring and deterministic
+time matter: evaluation loops, agent pipelines, robotics-style control mocks,
+and testable service internals.
 
-runlet's niche is small, pure Python deterministic replay. Everything else is
-deliberately out of scope.
+It is intentionally not a topic broker, service registry, RPC framework,
+parameter server, CLI launcher, network runtime, or continuous-time numerical
+simulator.
 
 ## Install / dev
 
@@ -67,10 +86,10 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 - [`docs/concepts.md`](docs/concepts.md): what each primitive is and the
   invariants the test suite pins.
 - [`docs/adr/`](docs/adr/): why each decision looks the way it does
-  (Topic-less, on-error-shutdown by default, anyio-only, …).
+  (Topic-less, on-error-shutdown by default, anyio-only).
 - [`docs/recipes.md`](docs/recipes.md): patterns kept off the core
   surface but importable under `runlet.recipes.*`: fanout, fan-in,
-  load balancing, worker pools, batcher, select, sync↔async bridge.
+  load balancing, worker pools, batcher, select, sync/async bridge.
   Source in `src/runlet/recipes/`.
 - [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.

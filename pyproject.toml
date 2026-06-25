@@ -30,7 +30,7 @@ dev = [
 
 [tool.uv]
 # Bump + `uv lock --upgrade` to refresh uv.lock.
-exclude-newer = "2026-05-18T00:00:00+09:00"
+exclude-newer = "2026-06-26T00:00:00+09:00"
 
 [tool.ruff]
 line-length = 119
@@ -44,6 +44,7 @@ source = "vcs"
 fallback-version = "0.1.0"
 
 [tool.hatch.version.raw-options]
+# Keep dev builds on the last tagged version instead of guessing the next release.
 version_scheme = "no-guess-dev"
 
 [tool.hatch.build.targets.wheel]
