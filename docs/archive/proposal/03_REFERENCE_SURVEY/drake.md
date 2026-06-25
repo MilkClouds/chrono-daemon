@@ -55,7 +55,7 @@ Drake는 dynamics + control modeling framework이며 모든 가치 제안이 그
 
 - **`Clock` plug-in.** Drake의 `Context::get_time` 패턴.
 - **`Simulator::AdvanceTo(t)` shape.** runlet의 `SimClock.advance_to(t)`가 같은 의미. burst step 가능.
-- **In-process composition first-class.** v0에서 distributed를 의식적으로 미룬 것 ([ADR 0006](../../adr/0006-in-process-v0-transport-adapter-slot.md)).
+- **In-process composition first-class.** v0에서 distributed를 의식적으로 미룬 것 ([ADR 0006](../../../adr/0006-in-process-v0-transport-adapter-slot.md)).
 - **`System` = composable unit.** runlet의 `Daemon`도 동일 — composition unit이 단일 추상.
 
 ## 거부한 디자인 결정

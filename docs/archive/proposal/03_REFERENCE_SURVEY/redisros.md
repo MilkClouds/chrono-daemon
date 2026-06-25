@@ -20,7 +20,7 @@ RedisROS의 README와 코드 inspection 기반:
 |-------------------|------|-------------|
 | **Node** | 컴포지션 단위. ROS2 형태. | `Daemon` |
 | **Publisher / Subscriber** | Redis pub/sub topic. | `Channel.send` / `Channel.recv` (단, runlet은 1:1) |
-| **Topic** | Redis key. | (없음 — runlet은 [ADR 0001](../../adr/0001-channel-is-the-sole-comm-primitive.md) Channel-only) |
+| **Topic** | Redis key. | (없음 — runlet은 [ADR 0001](../../../adr/0001-channel-is-the-sole-comm-primitive.md) Channel-only) |
 | **Service / Client** | Redis-based request/reply. | (없음, 채널 위에 사용자가 짠다) |
 | **Parameter server** | Redis hash. | (없음) |
 | **Spin** | Event loop drainer. | `Supervisor.__aenter__` |
@@ -51,9 +51,9 @@ RedisROS는 "Redis 위에 ROS2 API"라는 단일 axis에 집중한 작은 프로
 
 ## 거부한 디자인 결정
 
-- **Redis 의존.** runlet은 anyio 외 0 dependency ([ADR 0007](../../adr/0007-anyio-only-runtime-dependency.md)).
+- **Redis 의존.** runlet은 anyio 외 0 dependency ([ADR 0007](../../../adr/0007-anyio-only-runtime-dependency.md)).
 - **ROS2 API 그대로 따라가기.** runlet은 형태만 비슷하고 명시적으로 비-호환 (`SendStream` / `ReceiveStream` 분리, `Supervisor` 명시 등).
-- **Topic / Service / Parameter 풀 세트.** runlet은 [ADR 0001](../../adr/0001-channel-is-the-sole-comm-primitive.md) (Channel only) 와 [ADR 0005](../../adr/0005-no-lifecycle-states-beyond-start-run-stop.md) (lifecycle 최소화) 으로 surface 축소.
+- **Topic / Service / Parameter 풀 세트.** runlet은 [ADR 0001](../../../adr/0001-channel-is-the-sole-comm-primitive.md) (Channel only) 와 [ADR 0005](../../../adr/0005-no-lifecycle-states-beyond-start-run-stop.md) (lifecycle 최소화) 으로 surface 축소.
 
 ## 관찰
 

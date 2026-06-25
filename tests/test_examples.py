@@ -36,7 +36,7 @@ async def test_reflex_dual_mock_is_deterministic_across_runs(anyio_backend: str)
     Byte-equality additionally holds on asyncio but not on trio: trio's default
     scheduler intentionally randomizes task-spawn order across runs (an
     ASLR-like measure against accidental ordering dependence). See
-    ``examples/README.md`` for the discussion.
+    ``examples/README.md`` for the short discussion.
     """
     a = await run_mock(duration_s=2.0)
     b = await run_mock(duration_s=2.0)
@@ -62,7 +62,7 @@ async def test_multi_session_isolation() -> None:
     """Each session runs to its own duration in its own inner Supervisor.
 
     Sessions with different ``duration_s`` produce different action counts
-    proportional to their duration — proving the per-session SimClocks are
+    proportional to their duration, proving the per-session SimClocks are
     actually independent. Durations need to exceed S2's 1 Hz period so the
     first subgoal lands and S1/S0 can produce.
     """
@@ -77,7 +77,7 @@ async def test_multi_session_unregister_cancels_only_that_session() -> None:
     """Calling unregister before duration is up exits the targeted session promptly.
 
     A full 10-sim-second run would produce ~200 actions (S0_HZ * effective time).
-    An honoured unregister produces dramatically fewer — and importantly, the
+    An honoured unregister produces dramatically fewer. More importantly, the
     test returns rather than hanging on the long duration.
     """
     log = await run_with_early_unregister(long_duration_s=10.0, cancel_after_s=0.0)

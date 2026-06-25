@@ -10,23 +10,20 @@ ship.
   scheduler randomizes task-spawn ordering across runs, which limits the
   "byte equality across runs" form of replay determinism to asyncio. A
   shared `anyio.Event` set after all daemons register removes the
-  ambiguity — small enough to be a recipe, common enough that promoting
+  ambiguity. This is small enough to be a recipe, common enough that promoting
   it into the core is on the table. (Surfaced by
   `examples/reflex_dual_mock.py`.)
 - **Multi-process and network transports.** `Channel` is already a Protocol
-  (ADR 0006), so a `MultiprocessChannel` and a `ZenohChannel` can land
-  without breaking changes. The blocker is picking a serialization story
-  (msgspec vs. pickle vs. let-user-choose); none of the candidates is free
-  of dependency cost.
+  (ADR 0006), so adapters such as `MultiprocessChannel`, `ZmqChannel`, or
+  `ZenohChannel` can land without breaking the top-level API. The blockers
+  are dependency policy, serialization policy, and how much transport behavior
+  can preserve the SPSC fail-fast contract from ADR 0010.
 - **Test fixtures.** A `pytest` plugin that gives the user
   `async def test_foo(supervisor: Supervisor, sim_clock: SimClock): ...`
   with the boilerplate of "enter supervisor, advance clock, exit cleanly"
   pre-baked. Would shave ~10 LOC off every integration test.
-- **Restart history / liveness introspection.** Restart counts, last error,
-  uptime per daemon. Just enough for an operator to ask "is this daemon
-  flapping?" without instrumenting from scratch.
 
-## Maybe — not committed
+## Maybe, Not Committed
 
 - **Deliberate fan-in / worker-pool recipe.** Core channels are SPSC
   (ADR 0010). If users need competing consumers or multiple producers, that

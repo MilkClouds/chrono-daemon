@@ -44,7 +44,7 @@ class WouldBlock(Exception):
 
     The async ``send``/``receive`` variants block instead of raising this. The
     nowait variants exist as the enabling primitive for lossy backpressure
-    recipes (e.g. ``recipes.lossy.DropOldestSend``) — see ADR 0001 for why
+    recipes (e.g. ``recipes.lossy.DropOldestSend``). See ADR 0001 for why
     drop policies live at the recipe layer rather than on Channel itself.
 
     Mirrors anyio's `WouldBlock` so users don't have to import anyio.
@@ -64,6 +64,8 @@ OnError = Literal["shutdown", "restart", "ignore"]
 """Supervisor policy when a hosted daemon raises an uncaught exception.
 
 - ``"shutdown"`` (default): re-raise; anyio's TaskGroup cancels all siblings.
-- ``"restart"``: re-enter ``on_start``/``run``/``on_stop`` after a backoff governed by ``RestartPolicy``.
+- ``"restart"``: re-enter after ``on_start``/``run`` failures, with a
+  backoff governed by ``RestartPolicy``. Normal-path ``on_stop`` failures are
+  terminal unless ``on_error="ignore"``.
 - ``"ignore"``: log and let the daemon exit silently; siblings keep running.
 """

@@ -1,4 +1,4 @@
-# ADR 0010 — Channel endpoints are single-owner
+# ADR 0010: Channel endpoints are single-owner
 
 Status: Accepted (2026-06-25)
 
@@ -56,8 +56,8 @@ and sequential use from different setup/helper tasks is not rejected.
 
 ## Related
 
-- ADR 0001 — Channel is the sole communication primitive.
-- ADR 0006 — Transport adapters share the `SendStream` / `ReceiveStream`
+- ADR 0001: Channel is the sole communication primitive.
+- ADR 0006: Transport adapters share the `SendStream` / `ReceiveStream`
   protocol surface.
-- `runlet.recipes.fanout.tee` — the canonical 1:N broadcast helper.
-- `runlet.recipes.batcher` — deliberate fan-in request/response.
+- `runlet.recipes.fanout.tee`: the canonical 1:N broadcast helper.
+- `runlet.recipes.batcher`: deliberate fan-in request/response.

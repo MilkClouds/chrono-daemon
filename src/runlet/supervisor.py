@@ -9,8 +9,10 @@ to do:
   daemon's name reaches the resulting ``ExceptionGroup`` leaf. anyio's TaskGroup
   cancels every sibling.
 - ``"restart"``: sleep on ``ctx.clock`` per ``RestartPolicy`` (exponential
-  backoff), then re-enter ``on_start``/``run``/``on_stop``. Because backoff goes
-  through ``ctx.clock.sleep``, restart timing is deterministic under ``SimClock``.
+  backoff), then re-enter ``on_start``/``run`` after startup/runtime failures.
+  Cleanup failures from ``on_stop`` are terminal unless ``on_error="ignore"``.
+  Because backoff goes through ``ctx.clock.sleep``, restart timing is
+  deterministic under ``SimClock``.
 - ``"ignore"``: log and let the daemon exit; siblings keep running.
 
 Graceful shutdown (ADR 0009):
@@ -28,7 +30,6 @@ Graceful shutdown (ADR 0009):
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from types import TracebackType
@@ -43,7 +44,7 @@ from runlet.clock import Clock, WallClock
 from runlet.context import Context
 from runlet.daemon import Daemon, _FnDaemon
 
-__all__ = ["DaemonHealth", "DaemonState", "RestartPolicy", "Supervisor"]
+__all__ = ["DaemonFailurePhase", "DaemonHealth", "DaemonState", "RestartPolicy", "Supervisor"]
 
 DaemonState = Literal["starting", "running", "restarting", "stopped", "failed"]
 """Lifecycle state surfaced by :class:`DaemonHealth`.
@@ -57,6 +58,9 @@ DaemonState = Literal["starting", "running", "restarting", "stopped", "failed"]
   (shutdown / ignore terminal / restart exhausted). ``last_error`` carries
   the cause.
 """
+
+DaemonFailurePhase = Literal["on_start", "run", "on_stop"]
+"""Lifecycle phase that produced ``DaemonHealth.last_error``."""
 
 
 @dataclass
@@ -94,8 +98,12 @@ class DaemonHealth:
     ``on_start``.
     """
     last_error: BaseException | None
-    """The most recent exception that escaped ``run()`` (or ``on_start`` on
-    the failure paths). ``None`` if the daemon has never raised.
+    """The most recent exception that escaped ``on_start()``, ``run()``, or
+    normal-path ``on_stop()``. ``None`` if the daemon has never raised.
+    """
+    last_error_phase: DaemonFailurePhase | None
+    """Lifecycle phase that produced ``last_error``. ``None`` if
+    ``last_error`` is ``None``.
     """
     started_at: float | None
     """Clock-time when the current attempt's ``on_start`` returned. ``None``
@@ -116,6 +124,7 @@ class _DaemonRecord:
     state: DaemonState = "starting"
     restart_count: int = 0
     last_error: BaseException | None = None
+    last_error_phase: DaemonFailurePhase | None = None
     started_at: float | None = None
     # Set by the host loop when on_start returns successfully (first attempt
     # or any restart). Awaited by Supervisor.wait_all_started().
@@ -212,10 +221,9 @@ class Supervisor:
     def add(self, daemon: Daemon, *, name: str | None = None) -> None:
         """Register a Daemon instance. Launched immediately if the supervisor is running.
 
-        Emits a :class:`UserWarning` if ``name`` collides with a previously
-        registered daemon — duplicate names share a child logger and make
-        cross-task error attribution harder. Pass a unique ``name=...`` to
-        silence intentionally.
+        Raises :class:`ValueError` if ``name`` collides with a previously
+        registered daemon. Daemon names key diagnostics such as
+        :meth:`snapshot`, so collisions would make health records ambiguous.
 
         Raises :class:`TypeError` if ``daemon`` is not a :class:`Daemon`
         instance. A common mistake is to pass the ``@daemon`` factory itself
@@ -231,16 +239,11 @@ class Supervisor:
             raise TypeError(f"add() expected a Daemon instance, got {type(daemon).__name__}")
         chosen = name or daemon.name or type(daemon).__name__
         if chosen in self._seen_names:
-            warnings.warn(
-                f"duplicate daemon name {chosen!r}; both will share a child logger. "
-                "Pass a unique `name=...` to disambiguate.",
-                UserWarning,
-                stacklevel=2,
-            )
+            raise ValueError(f"duplicate daemon name {chosen!r}; pass a unique `name=...`")
         self._seen_names.add(chosen)
         # Create a fresh record per add(); the host loop mutates it as the
-        # daemon's state changes. Duplicate names will overwrite — the
-        # duplicate-name warning above already flagged that case.
+        # daemon's state changes. Names are unique, so snapshot() can key by
+        # daemon name without hiding a sibling.
         self._records[chosen] = _DaemonRecord(name=chosen)
         if self._tg is None:
             self._pending.append(_PendingDaemon(daemon, chosen))
@@ -366,6 +369,7 @@ class Supervisor:
                 state=rec.state,
                 restart_count=rec.restart_count,
                 last_error=rec.last_error,
+                last_error_phase=rec.last_error_phase,
                 started_at=rec.started_at,
                 uptime=uptime,
             )
@@ -413,6 +417,7 @@ class Supervisor:
                 )
                 on_start_done = False
                 on_stop_started = False
+                phase: DaemonFailurePhase = "on_start"
                 record.state = "starting"
                 record.started_at = None
                 try:
@@ -422,8 +427,10 @@ class Supervisor:
                         record.state = "running"
                         record.started_at = self._clock.now()
                         record.started_event.set()
+                        phase = "run"
                         await daemon.run(ctx)
                     on_stop_started = True
+                    phase = "on_stop"
                     await daemon.on_stop(ctx)
                     record.state = "stopped"
                     return
@@ -440,9 +447,14 @@ class Supervisor:
                     if not isinstance(exc, Exception):
                         record.state = "failed"
                         record.last_error = exc
+                        record.last_error_phase = phase
                         raise
                     record.last_error = exc
+                    record.last_error_phase = phase
                     ctx.logger.exception("daemon raised")
+                    if phase == "on_stop" and self._on_error != "ignore":
+                        record.state = "failed"
+                        raise DaemonError(f"daemon {name!r} cleanup failed: {exc}") from exc
                     if self._on_error == "shutdown":
                         record.state = "failed"
                         raise DaemonError(f"daemon {name!r} failed: {exc}") from exc

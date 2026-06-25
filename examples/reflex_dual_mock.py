@@ -1,25 +1,23 @@
-"""reflex-dual mock pipeline — System 2 / 1 / 0 inference, every model call mocked.
+"""reflex-dual mock pipeline: System 2 / 1 / 0 inference with mocked models.
 
-A direct mock of the production architecture in worv-ai/reflex PR #191. Each
-``S{N}Service`` call is replaced by ``await ctx.clock.sleep(latency)`` plus a
-deterministic toy computation, so the entire scenario runs in ~0 wall-clock
-time under ``SimClock``.
+This is a production-inspired three-rate inference pipeline. Each
+``S{N}Service`` call is replaced by ``await ctx.clock.sleep(latency)`` plus
+a deterministic toy computation, so the entire scenario runs in ~0
+wall-clock time under ``SimClock``.
 
 Byte-equality across repeated runs holds on the asyncio backend; trio's
 default scheduler randomizes task-spawn order across runs, so cross-run logs
-on trio agree in length, in monotone time, and in distribution — but not
+on trio agree in length, in monotone time, and in distribution, but not
 bit-for-bit. See ``examples/README.md`` for the discussion.
 
-In the production design (#191), observations are pushed *into* the dispatcher
-from outside: vla_eval's ``on_observation`` callback calls
-``dispatcher.push_obs`` + ``dispatcher.tick``. This mock follows the same
-shape — the supervisor's main task plays that "harness" role, writing the
-latest obs into ``obs_cache`` and advancing the SimClock between writes.
-There is no in-pipeline ``sensor`` daemon; obs is an external input.
+In the production shape this models, observations are pushed into the
+dispatcher from outside. This mock follows the same shape: the supervisor's
+main task plays the harness role, writes the latest obs into ``obs_cache``,
+and advances the SimClock between writes. There is no in-pipeline ``sensor``
+daemon; obs is an external input.
 
 Pipeline layout (rates are virtual under ``SimClock``; numbers below mirror
-the rates in the production design doc at
-``projects/reflex-train/docs/inference-refactor.md``):
+the rates of a typical slow-planner / fast-policy / high-rate-actuator stack):
 
     main task (harness) ─▶ obs_cache  (Latest[Obs])
                                 │
@@ -87,11 +85,10 @@ class Action:
 
 # --- rates and mock latencies ---------------------------------------------
 
-# Rates mirror the production design doc
-# (projects/reflex-train/docs/inference-refactor.md):
+# Rates mirror a representative production inference stack:
 #   - S2 fires at 1 Hz (period_ms: 1000)
 #   - S1 fires at 10 Hz (period_ms: 100)
-#   - S0 dispenses at the robot control rate (~20 Hz in the autonomous-mode example)
+#   - S0 dispenses at the robot control rate (~20 Hz)
 # The harness pushes obs at S1's obs_sampling_rate_hz (20 Hz) so the inference
 # obs rate matches what S1 was trained against.
 OBS_RATE_HZ = 20.0

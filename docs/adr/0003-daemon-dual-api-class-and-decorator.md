@@ -1,4 +1,4 @@
-# ADR 0003 — Daemon dual API: class and decorator
+# ADR 0003: Daemon dual API: class and decorator
 
 Status: Accepted (2026-05-18)
 
@@ -21,7 +21,7 @@ and instance state has to be smuggled through `nonlocal` or default-arg
 tricks).
 
 ROS2 nodes commit to the class form. asyncio task-spawning APIs commit to
-the function form. We do not want to commit either way — robotics control
+the function form. We do not want to commit either way. robotics control
 loops want classes, the recipes folder wants functions.
 
 ## Decision
@@ -44,7 +44,7 @@ ABC; supervisor code sees only `Daemon`.
 + The minimum-overhead expression of a daemon is three lines
   (`@daemon` + `async def` + body), but stateful daemons retain a class.
 + One ABC for type-checking; one path for the supervisor to handle.
-+ Decorator and class are interchangeable in tests — `_FnDaemon` is a
++ Decorator and class are interchangeable in tests. `_FnDaemon` is a
   `Daemon`, so `isinstance(decorated_daemon(), Daemon)` is true.
 - Two ways to do the same thing is a learning-curve tax. The documentation
   has to teach both, and explain which to pick.

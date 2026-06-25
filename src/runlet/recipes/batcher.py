@@ -9,20 +9,19 @@ Because core channel endpoints are single-owner (ADR 0010), this recipe's
 checkpoints rather than relying on multiple callers sharing blocking
 ``send()``.
 
-This is the pattern behind every dynamic-batching inference server (e.g.
-worv-ai/reflex PR #191's ``DynamicBatcher``): N independent callers each
-submit a request; a single batcher daemon accumulates up to ``max_batch``
-requests, optionally waits up to ``max_queue_delay`` clock-seconds for more
-to arrive, calls ``forward`` once with the batch, and fans the responses
-back to each caller's private reply channel.
+This is the pattern behind dynamic-batching inference servers: N independent
+callers each submit a request; a single batcher daemon accumulates up to
+``max_batch`` requests, optionally waits up to ``max_queue_delay``
+clock-seconds for more to arrive, calls ``forward`` once with the batch, and
+fans the responses back to each caller's private reply channel.
 
 Failure semantics: if ``forward`` raises, every caller in the batch sees
-the same exception delivered through their reply channel — avoiding the
+the same exception delivered through their reply channel. This avoids the
 silent-partial-failure trap where one caller gets a result and another
 hangs forever.
 
 Import as ``from runlet.recipes.batcher import batcher_loop, submit``. The
-recipe namespace (``runlet.recipes``) is best-effort — see
+recipe namespace (``runlet.recipes``) is best-effort; see
 ``src/runlet/recipes/__init__.py`` for the stability contract.
 """
 
@@ -50,7 +49,7 @@ Resp = TypeVar("Resp")
 
 @dataclass
 class Pending(Generic[Req, Resp]):
-    """Internal envelope. Callers don't construct these directly — use ``submit``."""
+    """Internal envelope. Callers don't construct these directly; use ``submit``."""
 
     req: Req
     reply: Channel[Resp | Exception]
@@ -87,7 +86,7 @@ async def batcher_loop(
         Required when ``max_queue_delay > 0``. Used to time the delay window
         in a way that's compatible with :class:`runlet.SimClock` (the timer
         is implemented as ``ctx.clock.sleep`` racing against
-        ``incoming.receive``, not as ``anyio.move_on_after`` — that one's
+        ``incoming.receive``, not as ``anyio.move_on_after``. That one is
         wall-clock and would silently misbehave under ``SimClock``).
     """
     if max_queue_delay < 0:
@@ -129,7 +128,7 @@ async def batcher_loop(
         await _dispatch_batch(batch, forward)
 
 
-# Sentinels for the racer — distinct objects so callers can compare by identity.
+# Sentinels for the racer. Distinct objects let callers compare by identity.
 _CLOSED = object()
 _TIMEOUT = object()
 

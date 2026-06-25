@@ -8,10 +8,16 @@ version = "0.1.0"
 description = "Tiny anyio-based concurrency primitives: Channel, Clock (wall + sim), Daemon, Supervisor."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+authors = [
+    { name = "Suhwan Choi" },
+]
 dependencies = [
     "anyio>=4",
 ]
+
+[project.urls]
+Repository = "https://github.com/MilkClouds/runlet"
 
 [dependency-groups]
 dev = [

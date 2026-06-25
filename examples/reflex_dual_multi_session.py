@@ -1,10 +1,10 @@
-"""reflex-dual mock — multi-session dispatcher via nested Supervisors.
+"""reflex-dual mock: multi-session dispatcher via nested Supervisors.
 
-Extends ``reflex_dual_mock`` to the N-concurrent-sessions shape of
-worv-ai/reflex PR #191's ``HarnessDispatcher``. The structure:
+Extends ``reflex_dual_mock`` to the N-concurrent-sessions shape used by a
+dispatcher-backed inference service. The structure:
 
 - The outer :class:`Supervisor` hosts a :class:`MockDispatcher` that
-  exposes ``register(sid, duration_s)`` and ``unregister(sid)`` — the
+  exposes ``register(sid, duration_s)`` and ``unregister(sid)``. These are the
   per-session counterparts of the production dispatcher's surface.
 - Each registered session runs in an *inner* :class:`Supervisor` (with its
   own :class:`SimClock`) spawned as one daemon on the outer one. The
@@ -12,7 +12,7 @@ worv-ai/reflex PR #191's ``HarnessDispatcher``. The structure:
   per-session ``Latest`` caches.
 - ``unregister(sid)`` sets a per-session ``anyio.Event``; the session's
   outer-side daemon notices on its next loop iteration, calls
-  ``inner.stop(grace=0)``, and returns — the outer supervisor's
+  ``inner.stop(grace=0)``, and returns. The outer supervisor's
   ``_on_daemon_exit`` then forgets the session.
 
 This mirrors production's per-session ``S{N}Loop`` + ``TimeServerRegistry``
@@ -96,11 +96,11 @@ async def session_runner(
 class MockDispatcher:
     """Outer-side handle exposing register/unregister over a Supervisor.
 
-    Roughly the runlet analogue of PR #191's ``HarnessDispatcher`` surface —
-    just the parts that matter for lifecycle. ``push_obs``/``tick`` are
-    absent because under runlet each session's inner SimClock and obs cache
-    are driven inside ``session_runner``; production replaces those by
-    routing the harness's calls through this object.
+    Roughly the runlet analogue of a production dispatcher surface, limited to
+    the parts that matter for lifecycle. ``push_obs``/``tick`` are absent
+    because under runlet each session's inner SimClock and obs cache are driven
+    inside ``session_runner``; production can replace those by routing harness
+    calls through this object.
     """
 
     def __init__(self, sup: Supervisor) -> None:

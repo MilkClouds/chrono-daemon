@@ -12,14 +12,19 @@ Public surface:
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version as _package_version
+
 from runlet._types import ChannelClosed, ChannelInUse, DaemonError, EndOfStream, OnError, WouldBlock
 from runlet.channel import Channel, ChannelStats, ReceiveStream, SendStream, open_channel
 from runlet.clock import Clock, SimClock, WallClock
 from runlet.context import Context
 from runlet.daemon import Daemon, daemon
-from runlet.supervisor import DaemonHealth, DaemonState, RestartPolicy, Supervisor
+from runlet.supervisor import DaemonFailurePhase, DaemonHealth, DaemonState, RestartPolicy, Supervisor
 
-__version__ = "0.1.0"
+try:
+    __version__ = _package_version("runlet")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
 
 __all__ = [
     "Channel",
@@ -30,6 +35,7 @@ __all__ = [
     "Context",
     "Daemon",
     "DaemonError",
+    "DaemonFailurePhase",
     "DaemonHealth",
     "DaemonState",
     "EndOfStream",

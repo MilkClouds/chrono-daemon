@@ -3,9 +3,8 @@
 Many deployments hand you a synchronous outer boundary (a model-server
 callback, a ROS subscriber, a CLI handler) but want the inside to be a
 long-lived runlet supervisor. anyio ships ``BlockingPortal`` for exactly
-this; ``host_async_dispatcher`` wraps that into the shape every "async
-dispatcher behind a sync ABC" deployment ends up at (e.g. worv-ai/reflex
-PR #191's ``ReFlExDualDispatcherServer``).
+this; ``host_async_dispatcher`` wraps that into the common "async dispatcher
+behind a sync ABC" shape.
 
 Usage::
 

@@ -55,8 +55,8 @@ async with Supervisor(clock=clock) as sup:
 | asyncio / trio | ✗ | ✓ |
 | Structured concurrency | ✗ | ✓ |
 | Cooperative shutdown | ✗ | ✓ |
-| Logger sim-time aware | ✗ | ✓ ([ADR 0008](../../adr/0008-sim-aware-logging-and-supervisor-diagnostics.md)) |
-| Daemon `on_stop` 보장 | ✗ | ✓ ([ADR 0009](../../adr/0009-cooperative-shutdown-and-lifecycle-guarantees.md)) |
+| Logger sim-time aware | ✗ | ✓ ([ADR 0008](../../../adr/0008-sim-aware-logging-and-supervisor-diagnostics.md)) |
+| Daemon `on_stop` 보장 | ✗ | ✓ ([ADR 0009](../../../adr/0009-cooperative-stop-signaling.md)) |
 | Channel introspection | ✗ | ✓ (`ChannelStats`) |
 | Type-checked Channel | ✗ (untyped msg) | ✓ (`Channel[T]`) |
 | 예외 supervision | ✗ | ✓ (3종 정책) |
@@ -75,7 +75,7 @@ simple_env는 sync prototype, runlet은 async production-shape 라이브러리. 
 
 - **Fully synchronous 모델.** simple_env의 가장 큰 제약. async/await 환경 (모던 Python ML 코드, dispatcher, eval harness) 에 끼우기 어려움. runlet은 anyio async로 전환.
 - **`Env.step()` 안에서 callback 직접 호출.** simple_env는 callback이 throw하면 `Env.step()` 자체가 throw — 다른 daemon 영향. runlet은 `Supervisor.on_error` policy로 격리.
-- **Topic broadcast.** simple_env는 ROS2 형태로 1:N broadcast 지원. runlet은 [ADR 0001](../../adr/0001-channel-is-the-sole-comm-primitive.md) 으로 1:1 환원.
+- **Topic broadcast.** simple_env는 ROS2 형태로 1:N broadcast 지원. runlet은 [ADR 0001](../../../adr/0001-channel-is-the-sole-comm-primitive.md) 으로 1:1 환원.
 - **Untyped message.** simple_env는 의도적 untyped. runlet은 `Channel[T]` Generic.
 - **threading.RLock in Clock.** simple_env가 thread safety 위해 lock을 둠 — 그러나 실제 parallelism은 없어 vestigial. runlet은 async라 lock 불필요.
 
@@ -94,4 +94,4 @@ simple_env는 GitHub에서 거의 비공개 prototype 형태로 머물러 있어
 
 - 메인 레포: <https://github.com/MilkClouds/simple_env>
 - runlet의 simple_env-등가 integration test:
-  `projects/runlet/tests/test_integration.py::test_three_daemon_pipeline_under_simclock`
+  `tests/test_integration.py::test_three_daemon_pipeline_under_simclock`

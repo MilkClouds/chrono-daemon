@@ -138,44 +138,7 @@ async def test_batcher_timeout_window_under_simclock() -> None:
         seen_batches.append(list(reqs))
         return list(reqs)
 
-    async def call_after_delay(x: int, delay: float, results: list[int]) -> None:
-        await clock.sleep(delay)
-        results.append(await submit(requests.send, x))
-
-    results: list[int] = []
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(
-            batcher_loop,
-            requests.recv,
-            identity,
-        )
-        # Two callers within the 0.5s window, one outside it.
-        tg.start_soon(call_after_delay, 1, 0.0, results)
-        tg.start_soon(call_after_delay, 2, 0.2, results)
-        tg.start_soon(call_after_delay, 3, 1.0, results)
-        await anyio.sleep(0)
-
-        # The batcher loop has to be launched with the clock kwarg; do so via
-        # a wrapper task because tg.start_soon doesn't take kwargs.
-        # (We're testing the timing behavior, not the call shape.)
-        # NB: replace above tg.start_soon with one that passes the clock.
-        # The cleanest way is to relaunch via the keyword-aware form below.
-
-        # Drive the clock.
-        await clock.advance(2.0)
-        await requests.send.aclose()
-
-    # We launched batcher without clock/max_queue_delay above, so this test
-    # actually exercises the *no-delay* path. Convert to a proper test of the
-    # delay path by re-running with the delay configured.
-
-    # Reset and run again with delay configured.
-    clock = SimClock()
-    requests = open_channel(maxsize=16)
-    seen_batches.clear()
-    results.clear()
-
-    async def call_after_delay2(x: int, delay: float) -> None:
+    async def call_after_delay(x: int, delay: float) -> None:
         await clock.sleep(delay)
         results.append(await submit(requests.send, x))
 
@@ -188,19 +151,18 @@ async def test_batcher_timeout_window_under_simclock() -> None:
             max_batch=32,
         )
 
+    results: list[int] = []
     async with anyio.create_task_group() as tg:
         tg.start_soon(run_batcher)
-        tg.start_soon(call_after_delay2, 1, 0.0)
-        tg.start_soon(call_after_delay2, 2, 0.2)  # within 0.5s window of first
-        tg.start_soon(call_after_delay2, 3, 1.0)  # arrives later, separate batch
+        tg.start_soon(call_after_delay, 1, 0.0)
+        tg.start_soon(call_after_delay, 2, 0.2)
+        tg.start_soon(call_after_delay, 3, 1.0)
         await anyio.sleep(0)
         await clock.advance(2.0)
         await requests.send.aclose()
 
-    # First batch should be {1, 2} (within window); 3 lands in its own batch.
     assert sorted(results) == [1, 2, 3]
-    # At least two distinct batches: not all three lumped together.
-    assert len(seen_batches) >= 2
+    assert seen_batches == [[1, 2], [3]]
 
 
 # -- sync_bridge -----------------------------------------------------------

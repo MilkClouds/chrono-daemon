@@ -1,4 +1,4 @@
-# ADR 0007 — `anyio` is the only runtime dependency
+# ADR 0007: `anyio` is the only runtime dependency
 
 Status: Accepted (2026-05-18)
 
@@ -21,7 +21,7 @@ anyio."
 
 `anyio>=4` is the only runtime dependency declared in `pyproject.toml`.
 The dev dependency group adds `pytest`, `trio` (for two-backend testing),
-`ruff`, and `pyrefly` — those are tooling, not runtime.
+`ruff`, and `pyrefly`. those are tooling, not runtime.
 
 This rules out, at the runtime level:
 
@@ -51,8 +51,8 @@ This rules out, at the runtime level:
 
 ## Related
 
-- ADR 0006 — transport-adapter slot is the most likely future source of
+- ADR 0006. transport-adapter slot is the most likely future source of
   dependency pressure. When it lands, the chosen serialization
   approach will be the topic of a new ADR.
-- ADR 0008 — sim-aware logging is implemented entirely with stdlib
+- ADR 0008. sim-aware logging is implemented entirely with stdlib
   `logging.LoggerAdapter`, no structlog/loguru required.

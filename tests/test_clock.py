@@ -147,6 +147,11 @@ async def test_simclock_advance_negative_raises() -> None:
         await clock.advance(-1.0)
 
 
+def test_simclock_settle_rounds_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="settle_rounds"):
+        SimClock(settle_rounds=0)
+
+
 async def test_simclock_every_yields_at_each_period() -> None:
     clock = SimClock()
     ticks: list[float] = []

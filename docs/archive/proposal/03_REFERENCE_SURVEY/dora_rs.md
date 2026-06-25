@@ -44,7 +44,7 @@ dora-rs README, FOSDEM 2024 슬라이드, 첫 release blog에서 sim-clock / bur
 
 | 어필 포인트 | dora-rs | runlet |
 |------------|---------|--------|
-| 분산 multi-machine | ✓ (Zenoh + SSH cluster scheduling) | ✗ (v0 in-process only, [ADR 0006](../../adr/0006-in-process-v0-transport-adapter-slot.md) slot 보유) |
+| 분산 multi-machine | ✓ (Zenoh + SSH cluster scheduling) | ✗ (v0 in-process only, [ADR 0006](../../../adr/0006-in-process-v0-transport-adapter-slot.md) slot 보유) |
 | Multi-language | ✓ (Python / Rust / C / C++) | ✗ (Python only) |
 | 빠른 IPC | ✓ (10–17× faster than ROS2) | ✓ (anyio in-memory) |
 | YAML graph | ✓ | ✗ (코드로 명시) |
@@ -54,7 +54,7 @@ dora-rs README, FOSDEM 2024 슬라이드, 첫 release blog에서 sim-clock / bur
 | asyncio + trio backend | ✗ (Rust runtime) | ✓ |
 | Pure Python | ✗ (Rust core + binding) | ✓ |
 | Structured concurrency | ✗ | ✓ (anyio TaskGroup) |
-| Daemon `on_stop` lifecycle 보장 | ✗ (process 종료에 의존) | ✓ ([ADR 0009](../../adr/0009-cooperative-shutdown-and-lifecycle-guarantees.md)) |
+| Daemon `on_stop` lifecycle 보장 | ✗ (process 종료에 의존) | ✓ ([ADR 0009](../../../adr/0009-cooperative-stop-signaling.md)) |
 
 dora-rs는 **production distributed dataflow**, runlet은 **in-process test/replay + minimal daemon supervisor**다. 이름 (`Node`, `Channel`, ...)이 겹치는 부분이 많지만 의도된 use case가 다르다.
 
@@ -62,19 +62,19 @@ dora-rs는 **production distributed dataflow**, runlet은 **in-process test/repl
 
 - **노드 = lifecycle unit이라는 개념.** dora-rs의 노드 추상이 runlet의 `Daemon`과 형태상 같다. 단 dora-rs는 OS process, runlet은 async task.
 - **명시적 dataflow wiring.** runlet은 YAML 대신 코드 변수로 wiring하지만, "consumer가 producer를 명시적으로 참조"라는 핵심 원칙은 공유한다.
-- **Channel과 transport의 분리.** dora-rs가 Zenoh를 transport adapter로 둔 것처럼, runlet도 `Channel` Protocol slot을 [ADR 0006](../../adr/0006-in-process-v0-transport-adapter-slot.md)으로 reserved.
+- **Channel과 transport의 분리.** dora-rs가 Zenoh를 transport adapter로 둔 것처럼, runlet도 `Channel` Protocol slot을 [ADR 0006](../../../adr/0006-in-process-v0-transport-adapter-slot.md)으로 reserved.
 
 ## 거부한 디자인 결정
 
 - **YAML graph declaration.** runlet은 코드로 wiring한다. YAML는 graph diff 가독성 / hot reload 측면에서 이점이 있으나, type checker 통과 / refactor 친화성 / IDE jumping에서 손해. Use case가 distributed deployment가 아니라 in-process test/replay라 trade-off가 다르다.
-- **노드 = 별도 OS process.** runlet은 v0에서 in-process만. 분산은 v0.x로 미뤘다 ([ADR 0006](../../adr/0006-in-process-v0-transport-adapter-slot.md)).
+- **노드 = 별도 OS process.** runlet은 v0에서 in-process만. 분산은 v0.x로 미뤘다 ([ADR 0006](../../../adr/0006-in-process-v0-transport-adapter-slot.md)).
 - **Apache Arrow message format.** in-process에서 직렬화 cost는 0이어야. 사용자가 Python object를 그대로 전달한다.
 
 ## 관찰
 
 dora-rs는 매우 active한 프로젝트이며 사용자 layer (Python binding) 도 깔끔하다. 만약 우리 use case가 "multi-machine robotics deployment with VLA inference"였다면 dora-rs가 자연스러운 선택지다. runlet의 use case는 그렇지 않다:
 
-- **#191의 `LocalS{1,2}Service`** 같은 시나리오는 같은 process에서 inference + 시뮬레이션을 결정론적으로 burst-replay하는 게 valuable. dora-rs는 거의 정의상 inference를 별도 process로 분리하므로 이 패턴이 안 맞다.
+- **Local `S{1,2}Service` style inference** 같은 시나리오는 같은 process에서 inference + 시뮬레이션을 결정론적으로 burst-replay하는 게 valuable. dora-rs는 거의 정의상 inference를 별도 process로 분리하므로 이 패턴이 안 맞다.
 - **eval rollout worker 100개 띄우기** 시나리오에서는 각 worker가 별도 SimClock에서 결정론적으로 돌아야. dora-rs의 process-per-node 모델로는 sim-clock 동기화가 안 된다.
 
 따라서 dora-rs는 runlet의 **경쟁 프로젝트가 아니라 인접 프로젝트**다. v0.x에서 multi-process transport adapter를 만들 때 dora-rs의 Zenoh 사용 패턴을 참고할 수 있다.

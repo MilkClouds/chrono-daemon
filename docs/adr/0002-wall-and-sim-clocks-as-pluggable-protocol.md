@@ -1,4 +1,4 @@
-# ADR 0002 — Wall and Sim clocks as a pluggable Clock protocol
+# ADR 0002: Wall and Sim clocks as a pluggable Clock protocol
 
 Status: Accepted (2026-05-18)
 
@@ -17,7 +17,7 @@ primitives, but does not provide a controllable virtual clock. trio's
 
 If daemon code is free to call `anyio.sleep` directly, no virtual clock can
 intercept it. Determinism would then depend on every daemon author
-remembering to use a `Clock` object — a passive convention is not strong
+remembering to use a `Clock` object. a passive convention is not strong
 enough.
 
 ## Decision

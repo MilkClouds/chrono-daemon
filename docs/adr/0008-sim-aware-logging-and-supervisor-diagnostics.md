@@ -1,30 +1,32 @@
-# ADR 0008 — Sim-time-aware logging and supervisor diagnostics
+# ADR 0008: Sim-time-aware logging and supervisor diagnostics
 
-Status: Accepted (2026-05-18)
+Status: Accepted (2026-05-18); amended (2026-06-25)
 
 ## Context
 
 The initial four-primitive core (`Channel`, `Clock`, `Daemon`, `Supervisor`)
 shipped the minimum surface required to run a deterministic burst-replay
-scenario. Building the `examples/reflex_dual_mock.py` pipeline
-(PR #191 architecture, mocked) and re-reading the API surface against
-ROS2, dora-rs, and Apollo CyberRT surfaced four small but non-deferable
-gaps. Each is a diagnostic hole that makes the library's headline
+scenario. Building the `examples/reflex_dual_mock.py` pipeline and
+re-reading the API surface against ROS2, dora-rs, and Apollo CyberRT surfaced
+four small but non-deferable gaps. Each is a diagnostic hole that makes the
+library's headline
 capability (sim-time replay) harder to actually use:
 
 1. `Context.logger` was plain stdlib `logging.Logger`. Records carried only
    wall-clock timestamps, so a `SimClock` run produced log lines all
-   stamped within the same microsecond — invisible relative ordering, no
+   stamped within the same microsecond. There was invisible relative ordering, no
    way to correlate a log line to "what virtual instant did this happen
    at."
 2. When a daemon raised under `on_error="shutdown"`, the resulting
    `ExceptionGroup` contained the original exception (e.g. `RuntimeError`)
    with no attribution back to which daemon produced it. `logger.exception`
    wrote the daemon name to the log, but the in-process programmatic path
-   (`except* RuntimeError as eg: ...`) lost that information.
+   (`except* RuntimeError as eg: ...`) lost that information. Later cleanup
+   work also showed that `last_error` alone was not enough; operators need to
+   know whether the error came from `on_start`, `run`, or `on_stop`.
 3. `Supervisor.add(d, name="X")` accepted duplicate names silently. Two
-   daemons with the same name share a child logger; cross-task diagnosis
-   gets ambiguous.
+   daemons with the same name shared a child logger and one `snapshot()`
+   record key; cross-task diagnosis was ambiguous.
 4. `Channel.send` and `Channel.recv` exposed no introspection. anyio's
    `MemoryObjectStream.statistics()` was available internally but not on
    the runlet API. Debugging "is this channel full, who is waiting" needed
@@ -53,10 +55,14 @@ Four targeted additions, each ~10-30 LOC:
   exception can `e.__cause__`; code that wants the daemon name can pattern-
   match on the message.
 
-- **`Supervisor.add` warns on duplicate names.** A `UserWarning` is emitted
-  if the chosen name was already registered. Behavior is otherwise
-  unchanged (both daemons run). The user silences the warning by passing a
-  unique `name=...`.
+- **`DaemonHealth.last_error_phase` records where the error came from.**
+  The value is one of `on_start`, `run`, `on_stop`, or `None` when
+  `last_error` is `None`.
+
+- **`Supervisor.add` rejects duplicate names.** A `ValueError` is raised if
+  the chosen name was already registered. Daemon names key the supervisor's
+  diagnostics, so allowing a collision would hide one daemon's health record
+  behind another.
 
 - **`Channel.send.statistics()` / `Channel.recv.statistics()`** return a
   new `ChannelStats` frozen dataclass with `current_buffer_used`,
@@ -68,16 +74,19 @@ Four targeted additions, each ~10-30 LOC:
 
 ## Consequences
 
-+ Logs are now interpretable under `SimClock` — every line carries the
++ Logs are now interpretable under `SimClock`; every line carries the
   virtual instant it was emitted at.
 + `ExceptionGroup` leaves identify the failing daemon by name, both in
   programmatic catches and in the stderr output.
-+ Accidental name collisions become a noisy first-run warning, not a
-  silent ambiguity that surfaces only when a colleague stares at a
-  confusing log.
++ Snapshot consumers can tell startup, runtime, and cleanup failures apart
+  without parsing logs.
++ Accidental name collisions fail immediately instead of producing ambiguous
+  logs and overwritten health records.
 + Channel diagnostics are a one-call away; backpressure debugging no
   longer requires private-attribute spelunking.
-+ All changes are additive. Existing code keeps working unchanged.
++ The logging, error wrapping, and channel statistics changes are additive.
+  Duplicate-name rejection is a small breaking change for callers that relied
+  on shared names, but those names already made diagnostics unsound.
 - `Context.logger`'s declared type widens from `Logger` to
   `Logger | ClockAwareLoggerAdapter`. Code that called
   `logger.setLevel(...)` etc. still works (adapter forwards), but type
@@ -93,10 +102,11 @@ Four targeted additions, each ~10-30 LOC:
 
 ## Related
 
-- ADR 0002 — `SimClock` is the load-bearing primitive this ADR makes
+- ADR 0002: `SimClock` is the load-bearing primitive this ADR makes
   *observable*. Sim-time replay was incomplete without sim-time logs.
-- ADR 0004 — `on_error="shutdown"` is the default; wrapping in `DaemonError`
+- ADR 0004: `on_error="shutdown"` is the default; wrapping in `DaemonError`
   is how the daemon's identity survives that path.
-- ADR 0006 — `ChannelStats` is part of the transport-agnostic Protocol
+- ADR 0006: `ChannelStats` is part of the transport-agnostic Protocol
   surface; future transports must implement `statistics()`.
-- `examples/README.md` — the post-mortem that surfaced these four gaps.
+- `docs/archive/reflex-dual-postmortem.md`: the postmortem that surfaced
+  these four gaps.

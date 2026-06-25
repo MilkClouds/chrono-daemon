@@ -1,14 +1,12 @@
 """Supervisor: shutdown propagation, restart with backoff, max_retries, cancel scope per daemon.
 
-Also covers the diagnostics surface (duplicate-name warning, DaemonError
+Also covers the diagnostics surface (duplicate-name rejection, DaemonError
 wrapping that exposes the failing daemon's name on the ExceptionGroup leaf)
 and the stop-signaling surface (signal_stop, stop(grace), shielded on_stop
 on the force-cancel path).
 """
 
 from __future__ import annotations
-
-import warnings
 
 import anyio
 import pytest
@@ -69,22 +67,17 @@ async def test_shutdown_on_error_cancels_siblings() -> None:
     assert "boom" in str(daemon_errs[0].__cause__)
 
 
-async def test_duplicate_daemon_name_emits_warning() -> None:
+async def test_duplicate_daemon_name_is_rejected() -> None:
     clock = SimClock()
 
     class _Quick(Daemon):
         async def run(self, ctx: Context) -> None:
             pass
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        async with Supervisor(clock=clock) as sup:
+    async with Supervisor(clock=clock) as sup:
+        sup.add(_Quick(), name="shared-name")
+        with pytest.raises(ValueError, match="duplicate daemon name"):
             sup.add(_Quick(), name="shared-name")
-            sup.add(_Quick(), name="shared-name")
-
-    duplicate_warnings = [w for w in caught if "duplicate daemon name" in str(w.message)]
-    assert len(duplicate_warnings) == 1
-    assert "shared-name" in str(duplicate_warnings[0].message)
 
 
 async def test_ignore_on_error_lets_siblings_continue() -> None:
@@ -306,10 +299,14 @@ async def test_on_stop_skipped_when_on_start_fails() -> None:
         async def on_stop(self, ctx: Context) -> None:
             log.append("on_stop")  # must not be reached
 
-    async with Supervisor(clock=clock, on_error="ignore") as sup:
-        sup.add(_StartFails())
+    sup = Supervisor(clock=clock, on_error="ignore")
+    async with sup:
+        sup.add(_StartFails(), name="start-fails")
 
     assert log == ["on_start-pre"]
+    snap = sup.snapshot()
+    assert isinstance(snap["start-fails"].last_error, RuntimeError)
+    assert snap["start-fails"].last_error_phase == "on_start"
 
 
 async def test_on_stop_failure_is_not_retried() -> None:
@@ -333,6 +330,32 @@ async def test_on_stop_failure_is_not_retried() -> None:
     snap = sup.snapshot()
     assert snap["stop-fails"].state == "stopped"
     assert isinstance(snap["stop-fails"].last_error, RuntimeError)
+    assert snap["stop-fails"].last_error_phase == "on_stop"
+
+
+async def test_on_stop_failure_is_not_restarted() -> None:
+    """Cleanup failure is terminal under on_error='restart'."""
+    clock = SimClock()
+    log: list[str] = []
+
+    class _StopFails(Daemon):
+        async def run(self, ctx: Context) -> None:
+            log.append("run")
+
+        async def on_stop(self, ctx: Context) -> None:
+            log.append("on_stop")
+            raise RuntimeError("cleanup failed")
+
+    sup = Supervisor(clock=clock, on_error="restart", restart=RestartPolicy(base=0.01, max_retries=3))
+    with pytest.raises(BaseExceptionGroup):
+        async with sup:
+            sup.add(_StopFails(), name="stop-fails")
+
+    assert log == ["run", "on_stop"]
+    snap = sup.snapshot()
+    assert snap["stop-fails"].state == "failed"
+    assert isinstance(snap["stop-fails"].last_error, RuntimeError)
+    assert snap["stop-fails"].last_error_phase == "on_stop"
 
 
 async def test_add_rejects_daemon_factory_with_clear_error() -> None:
@@ -463,6 +486,7 @@ async def test_snapshot_after_failure_under_ignore_shows_failed_or_stopped() -> 
     snap = sup.snapshot()
     assert snap["crasher"].state == "stopped"
     assert isinstance(snap["crasher"].last_error, RuntimeError)
+    assert snap["crasher"].last_error_phase == "run"
     assert "kaboom" in str(snap["crasher"].last_error)
 
 
@@ -493,6 +517,7 @@ async def test_snapshot_restart_count_increments_through_backoff() -> None:
     assert snap["flapper"].restart_count == 2
     assert snap["flapper"].state == "stopped"
     assert isinstance(snap["flapper"].last_error, RuntimeError)
+    assert snap["flapper"].last_error_phase == "run"
 
 
 async def test_snapshot_failed_under_shutdown_policy() -> None:
@@ -511,6 +536,7 @@ async def test_snapshot_failed_under_shutdown_policy() -> None:
     snap = sup.snapshot()
     assert snap["boomer"].state == "failed"
     assert isinstance(snap["boomer"].last_error, RuntimeError)
+    assert snap["boomer"].last_error_phase == "run"
 
 
 # -- wait_all_started ----------------------------------------------------------

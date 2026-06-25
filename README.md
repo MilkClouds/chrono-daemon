@@ -1,7 +1,7 @@
 # runlet
 
 A small, general-purpose concurrency library on top of [anyio](https://anyio.readthedocs.io/).
-Four primitives, no Topic, no QoS, no parameter server — and a `SimClock`
+Four primitives, no Topic, no QoS, no parameter server, and a `SimClock`
 that lets you replay a 10-second multi-daemon scenario in microseconds of
 wall time. asyncio can pin byte-identical replay; trio is supported with
 the scheduler-order caveat documented in [`examples/README.md`](examples/README.md).
@@ -49,18 +49,17 @@ and how they compose.
 | Multi-daemon async code with explicit wiring | dynamic topic discovery / pub-sub broadcast |
 | Deterministic burst-replay of time-dependent code | a CLI / runtime / launcher |
 | `anyio` underneath; both asyncio and trio supported | a GPU-aware streaming engine (use [Holoscan](https://github.com/nvidia-holoscan/holoscan-sdk)) |
-| ~700 LOC you can read end-to-end in an afternoon | continuous-time numerical simulation (use [Drake](https://github.com/RobotLocomotion/drake)) |
+| A small Python codebase you can read end-to-end | continuous-time numerical simulation (use [Drake](https://github.com/RobotLocomotion/drake)) |
 | Zero runtime dependencies beyond `anyio` | a ROS replacement (use [dora-rs](https://github.com/dora-rs/dora) or ROS2) |
 
-The closest comparable projects — dora-rs, Apollo CyberRT, HORUS, Drake,
-Holoscan — are surveyed in the design background. runlet's niche is the
-intersection of "small, pure Python" and "deterministic burst replay
-first-class"; everything else is deliberately not-runlet.
+The design background surveys comparable projects such as dora-rs, Apollo
+CyberRT, HORUS, Drake, and Holoscan. runlet's niche is the intersection of
+"small, pure Python" and "deterministic burst replay first-class"; everything
+else is deliberately not-runlet.
 
 ## Install / dev
 
 ```bash
-cd projects/runlet
 uv sync --dev
 make check        # ruff + pyrefly
 make test         # pytest on asyncio + trio
@@ -71,18 +70,18 @@ Python 3.11+. Only runtime dependency is `anyio>=4`.
 
 ## Where to look next
 
-- [`docs/concepts.md`](docs/concepts.md) — what each primitive is and the
+- [`docs/concepts.md`](docs/concepts.md): what each primitive is and the
   invariants the test suite pins.
-- [`docs/adr/`](docs/adr/) — why each decision looks the way it does
+- [`docs/adr/`](docs/adr/): why each decision looks the way it does
   (Topic-less, on-error-shutdown by default, anyio-only, …).
-- [`docs/recipes.md`](docs/recipes.md) — patterns kept off the core
+- [`docs/recipes.md`](docs/recipes.md): patterns kept off the core
   surface but importable under `runlet.recipes.*`: fanout, batcher,
   select, sync↔async bridge. Source in `src/runlet/recipes/`.
-- [`docs/roadmap.md`](docs/roadmap.md) — what's planned next and what's
+- [`docs/roadmap.md`](docs/roadmap.md): what's planned next and what's
   deliberately deferred.
-- [`examples/reflex_dual_mock.py`](examples/reflex_dual_mock.py) — full
+- [`examples/reflex_dual_mock.py`](examples/reflex_dual_mock.py): full
   multi-rate System 2/1/0 mock pipeline, with an ergonomics post-mortem in
-  [`examples/README.md`](examples/README.md).
+  [`docs/archive/reflex-dual-postmortem.md`](docs/archive/reflex-dual-postmortem.md).
 
 ## Status
 

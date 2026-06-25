@@ -1,4 +1,4 @@
-# ADR 0004 — `on_error="shutdown"` is the Supervisor default
+# ADR 0004: `on_error="shutdown"` is the Supervisor default
 
 Status: Accepted (2026-05-18)
 
@@ -7,12 +7,13 @@ Status: Accepted (2026-05-18)
 When a daemon raises an unhandled exception, the supervisor has to choose
 between three reasonable behaviors:
 
-1. **Shutdown** — propagate the exception; the task group cancels all
+1. **Shutdown**. Propagate the exception; the task group cancels all
    siblings; the `async with Supervisor` block exits with the original
    error wrapped in an `ExceptionGroup`.
-2. **Restart** — sleep on a backoff and re-enter `on_start`/`run`/`on_stop`,
-   keeping siblings alive in the meantime.
-3. **Ignore** — log the failure, drop the daemon, keep siblings running.
+2. **Restart**. Sleep on a backoff and re-enter after `on_start` or `run`
+   failures, keeping siblings alive in the meantime. Normal-path `on_stop`
+   cleanup failures are terminal unless `on_error="ignore"`.
+3. **Ignore**. Log the failure, drop the daemon, keep siblings running.
 
 Each is correct for some deployment. The default matters because the
 default is what people experience before they read the docs, and what
@@ -47,7 +48,7 @@ exception at `error` level and exits the daemon's host loop.
 
 ## Consequences
 
-+ Crashing daemons in tests fail loudly and immediately — `pytest` shows
++ Crashing daemons in tests fail loudly and immediately. `pytest` shows
   the original exception inside the `ExceptionGroup`.
 + Production deployments that need resilience opt in explicitly, with a
   named policy that's reviewable in code.

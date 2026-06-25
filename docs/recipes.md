@@ -21,47 +21,45 @@ The stability contract is restated at the top of
 
 ## Index
 
-- **`runlet.recipes.fanout.tee(src, *dests)`** —
+- **`runlet.recipes.fanout.tee(src, *dests)`**:
   [`fanout.py`](../src/runlet/recipes/fanout.py). 1:N broadcast with
   per-destination backpressure. Replaces the pub/sub `Topic` we chose not
   to ship (ADR 0001).
-- **`runlet.recipes.select.select(*receivers)`** —
+- **`runlet.recipes.select.select(*receivers)`**:
   [`select.py`](../src/runlet/recipes/select.py). Wait on the first of
   several receivers to be ready. The Go `select` equivalent. anyio does
   not ship this as a primitive because the structured-concurrency idiom
   (`task_group` + `cancel_scope`) subsumes it; the recipe wraps that idiom.
-- **`runlet.recipes.batcher.batcher_loop / submit`** —
+- **`runlet.recipes.batcher.batcher_loop / submit`**:
   [`batcher.py`](../src/runlet/recipes/batcher.py). Collate-forward-split:
   gather N independent requests into one batched call, then route
   responses back. Supports a SimClock-compatible `max_queue_delay` timer
   (raced against `incoming.receive` via `ctx.clock.sleep`, *not*
-  `anyio.move_on_after` — that one is wall-clock-only and would silently
+  `anyio.move_on_after`; that one is wall-clock-only and would silently
   misbehave under `SimClock`). On `forward` exceptions, every caller in
   the batch sees the same exception (no silent partial failure). This is
   deliberate fan-in on top of SPSC core channels, so callers should use
   `submit()` rather than sharing blocking `send()` directly.
-- **`runlet.recipes.cooperative_every.cooperative_every(ctx, period)`** —
+- **`runlet.recipes.cooperative_every.cooperative_every(ctx, period)`**:
   [`cooperative_every.py`](../src/runlet/recipes/cooperative_every.py).
   Stop-aware periodic iteration: like `ctx.clock.every(period)`, but exits
   when `ctx.stopping` becomes True. The reasonable default for a daemon
   loop that should honour `Supervisor.stop`.
-- **`runlet.recipes.latest.Latest`** —
+- **`runlet.recipes.latest.Latest`**:
   [`latest.py`](../src/runlet/recipes/latest.py). One-slot cache for the
   "most-recent value" pattern: producer calls `.set(value)`, N consumers
   call `.get()`. The standard way to share a latest-snapshot across
   daemons without a broadcast channel (ADR 0001).
-- **`runlet.recipes.sync_bridge.host_async_dispatcher`** —
+- **`runlet.recipes.sync_bridge.host_async_dispatcher`**:
   [`sync_bridge.py`](../src/runlet/recipes/sync_bridge.py). Host a
   long-lived runlet supervisor on a dedicated event loop; sync callers
-  invoke its dispatcher via `BlockingPortal`. The shape every "async
-  dispatcher behind a sync ABC" deployment ends up at (e.g. PR #191's
-  `ReFlExDualDispatcherServer`).
-- **`runlet.recipes.lossy.DropNewestSend / DropOldestSend / CoalesceSend`** —
+  invoke its dispatcher via `BlockingPortal`.
+- **`runlet.recipes.lossy.DropNewestSend / DropOldestSend / CoalesceSend`**:
   [`lossy.py`](../src/runlet/recipes/lossy.py). `SendStream` wrappers
   that never block the producer when the buffer is full: discard the
   incoming item, evict the oldest buffered item, or single-slot coalesce
   to "latest wins". Each tracks a `dropped` counter. Built on the
-  `send_nowait`/`receive_nowait` primitives — the reason those exist on
+  `send_nowait`/`receive_nowait` primitives. This is why those exist on
   the `SendStream`/`ReceiveStream` protocols at all. `DropOldestSend` /
   `CoalesceSend` are in-process only (they need `ReceiveStream` access);
   a network transport would implement the same policy server-side.
