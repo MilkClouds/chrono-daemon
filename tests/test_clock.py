@@ -161,6 +161,25 @@ async def test_simclock_every_yields_at_each_period() -> None:
     assert ticks == [0.5, 1.0, 1.5, 2.0]
 
 
+async def test_simclock_every_first_now_fires_immediately() -> None:
+    """``first="now"`` fires at ``now()`` first, then every period."""
+    clock = SimClock()
+    ticks: list[float] = []
+
+    async def ticker() -> None:
+        async for t in clock.every(0.5, first="now"):
+            ticks.append(t)
+            if len(ticks) >= 3:
+                return
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        await anyio.sleep(0)
+        await clock.advance(1.0)
+
+    assert ticks == [0.0, 0.5, 1.0]
+
+
 async def test_simclock_sleep_zero_is_a_checkpoint() -> None:
     clock = SimClock(t0=42.0)
     await clock.sleep(0)

@@ -34,7 +34,7 @@ that tradeoff.
 ### `Clock`
 
 A small protocol with `now()`, `async sleep(seconds)`,
-`async wait_until(deadline)`, and `every(period)`. Two implementations ship:
+`async wait_until(deadline)`, and `every(period, first=...)`. Two implementations ship:
 
 - `WallClock` uses `time.monotonic()` for `now()` and `anyio.sleep` for
   sleeping. Use it in production.
