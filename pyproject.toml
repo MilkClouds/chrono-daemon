@@ -34,10 +34,6 @@ dev = [
     "pyrefly>=0.57",
 ]
 
-[tool.uv]
-# Bump + `uv lock --upgrade` to refresh uv.lock.
-exclude-newer = "2026-06-26T00:00:00+09:00"
-
 [tool.ruff]
 line-length = 119
 

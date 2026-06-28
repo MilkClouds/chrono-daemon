@@ -39,7 +39,8 @@ This rules out, at the runtime level:
 + `pip install chrono-daemon` pulls anyio and nothing else.
 + Embedding chrono-daemon in another project is risk-free: no transitive dependency
   is going to bring its own peer-dep conflict.
-+ The lockfile is tiny; `uv lock --upgrade` rarely surfaces churn.
++ Development installs resolve from `pyproject.toml` ranges, so CI exercises
+  the library's dependency bounds instead of a committed application lockfile.
 + "What does chrono-daemon really do?" has a small answer: read the seven src
   modules. There is no behavior hidden behind a third-party library.
 - Features that would be one import away in a different library

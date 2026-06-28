@@ -21,7 +21,7 @@ jobs:
         run: uv python install 3.11
 
       - name: Install dependencies
-        run: uv sync --dev --extra zmq --locked
+        run: uv sync --dev --extra zmq
 
       - name: Check
         run: make check
