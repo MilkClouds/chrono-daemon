@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chrono-daemon"
+dynamic = ["version"]
+description = "Tiny anyio-based concurrency primitives: Channel, Clock (wall + sim), Daemon, Supervisor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "Suhwan Choi" },
+]
+dependencies = [
+    "anyio>=4",
+]
+
+[project.optional-dependencies]
+zmq = [
+    "msgspec>=0.18",
+    "pyzmq>=26",
+]
+
+[project.urls]
+Repository = "https://github.com/MilkClouds/chrono-daemon"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-anyio",
+    "trio>=0.27",
+    "ruff",
+    "pyrefly>=0.57",
+]
+
+[tool.uv]
+# Bump + `uv lock --upgrade` to refresh uv.lock.
+exclude-newer = "2026-06-26T00:00:00+09:00"
+
+[tool.ruff]
+line-length = 119
+
+[tool.pyrefly]
+project-includes = ["src/", "tests/", "examples/"]
+search-path = ["src", "examples"]
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.1.0"
+
+[tool.hatch.version.raw-options]
+# Keep dev builds on the last tagged version instead of guessing the next release.
+version_scheme = "no-guess-dev"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chrono_daemon"]
