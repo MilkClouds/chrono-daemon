@@ -11,7 +11,7 @@ import itertools
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 import anyio
 import anyio.lowlevel
@@ -38,11 +38,12 @@ class Clock(Protocol):
         """Sleep until absolute clock-time ``deadline``. Past deadlines yield once and return."""
         ...
 
-    def every(self, period: float) -> AsyncIterator[float]:
+    def every(self, period: float, *, first: Literal["now", "after"] = "after") -> AsyncIterator[float]:
         """Yield clock-time stamps every ``period`` seconds.
 
-        The first tick is at ``now() + period``. If the consumer falls behind,
-        missed ticks are skipped.
+        ``first`` controls the first tick: ``"after"`` (default) fires at
+        ``now() + period``; ``"now"`` fires immediately at ``now()``, then every
+        ``period``. If the consumer falls behind, missed ticks are skipped.
         """
         ...
 
@@ -62,10 +63,10 @@ class WallClock:
     async def wait_until(self, deadline: float) -> None:
         await self.sleep(deadline - self.now())
 
-    async def every(self, period: float) -> AsyncIterator[float]:
+    async def every(self, period: float, *, first: Literal["now", "after"] = "after") -> AsyncIterator[float]:
         if period <= 0:
             raise ValueError(f"every() period must be positive, got {period}")
-        next_t = self.now() + period
+        next_t = self.now() if first == "now" else self.now() + period
         while True:
             now = self.now()
             if next_t > now:
@@ -174,10 +175,10 @@ class SimClock:
         self._drop_cancelled_tops()
         return bool(self._waiters) and self._waiters[0].deadline <= t
 
-    async def every(self, period: float) -> AsyncIterator[float]:
+    async def every(self, period: float, *, first: Literal["now", "after"] = "after") -> AsyncIterator[float]:
         if period <= 0:
             raise ValueError(f"every() period must be positive, got {period}")
-        next_t = self._t + period
+        next_t = self._t if first == "now" else self._t + period
         while True:
             delta = next_t - self._t
             if delta > 0:
