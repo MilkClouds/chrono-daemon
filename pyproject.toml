@@ -37,6 +37,10 @@ dev = [
 [tool.ruff]
 line-length = 119
 
+[tool.ruff.lint]
+# ruff 0.16 widened its default rule set; keep the one this code base is written against.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pyrefly]
 project-includes = ["src/", "tests/", "examples/"]
 search-path = ["src", "examples"]
