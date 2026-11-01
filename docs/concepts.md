@@ -40,7 +40,9 @@ A small protocol with `now()`, `async sleep(seconds)`,
   sleeping. Use it in production.
 - `SimClock` is a deterministic virtual clock. Time only moves when a driver
   task calls `advance(dt)` or `advance_to(t)`. Sleepers wake in deadline order,
-  with a settle budget for follow-up sleeps; see ADR 0002.
+  with a settle budget for follow-up sleeps; see ADR 0002. A host that tracks
+  its own pending work passes `advance_to(t, settle=...)` to wait for it
+  between wakes; deadlines within `rtol`/`atol` of `t` count as due; see ADR 0012.
 
 Daemons must reach for `ctx.clock.sleep(...)`, not `anyio.sleep(...)`
 directly, or `SimClock` cannot intercept time. The reasoning is in ADR 0002.

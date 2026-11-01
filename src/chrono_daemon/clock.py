@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -21,6 +22,7 @@ __all__ = ["Clock", "SimClock", "WallClock"]
 # Checkpoints yielded between heap inspections so woken tasks can register
 # follow-up sleeps. anyio has no portable "run until idle" primitive.
 _DEFAULT_SETTLE_ROUNDS = 8
+_DEFAULT_MAX_SETTLES = 1000
 
 
 class Clock(Protocol):
@@ -85,6 +87,7 @@ class _Waiter:
     deadline: float
     seq: int
     event: anyio.Event = field(compare=False)
+    registered_at: float = field(compare=False)
     cancelled: bool = field(default=False, compare=False)
 
     def __lt__(self, other: _Waiter) -> bool:
@@ -96,7 +99,9 @@ class SimClock:
 
     Time only moves when a driver task calls ``advance(dt)`` or ``advance_to(t)``.
     All sleepers are released exactly at their registered deadline, in deadline order,
-    with insertion order as the tiebreaker.
+    with insertion order as the tiebreaker. ``settle_rounds`` checkpoints after each wake
+    let woken work run; a driver that knows of more pending work passes ``settle=``
+    to ``advance_to``; see ADR 0012.
     """
 
     def __init__(self, t0: float = 0.0, *, settle_rounds: int = _DEFAULT_SETTLE_ROUNDS) -> None:
@@ -109,6 +114,8 @@ class SimClock:
         # and are skipped on pop.
         self._waiters: list[_Waiter] = []
         self._seq = itertools.count()
+        self._advancing = False
+        self._deferred: list[_Waiter] = []  # re-sleeps at the target inside its tolerance, back in the heap after
 
     def now(self) -> float:
         return self._t
@@ -125,7 +132,7 @@ class SimClock:
         await anyio.lowlevel.checkpoint()
         if deadline <= self._t:
             return
-        waiter = _Waiter(deadline=deadline, seq=next(self._seq), event=anyio.Event())
+        waiter = _Waiter(deadline=deadline, seq=next(self._seq), event=anyio.Event(), registered_at=self._t)
         heapq.heappush(self._waiters, waiter)
         try:
             await waiter.event.wait()
@@ -137,55 +144,118 @@ class SimClock:
                 while self._waiters and self._waiters[0].cancelled:
                     heapq.heappop(self._waiters)
 
-    async def advance(self, dt: float) -> None:
-        """Advance virtual time by ``dt`` seconds."""
+    async def advance(
+        self,
+        dt: float,
+        *,
+        settle: Callable[[], Awaitable[bool]] | None = None,
+        max_settles: int = _DEFAULT_MAX_SETTLES,
+        rtol: float = 1e-9,
+        atol: float = 0.0,
+    ) -> None:
+        """Advance virtual time by ``dt`` seconds; keywords as in ``advance_to``."""
         if dt < 0:
             raise ValueError(f"cannot advance backwards (dt={dt})")
-        await self.advance_to(self._t + dt)
+        await self.advance_to(self._t + dt, settle=settle, max_settles=max_settles, rtol=rtol, atol=atol)
 
-    async def advance_to(self, t: float) -> None:
-        """Advance virtual time to absolute ``t``."""
+    async def advance_to(
+        self,
+        t: float,
+        *,
+        settle: Callable[[], Awaitable[bool]] | None = None,
+        max_settles: int = _DEFAULT_MAX_SETTLES,
+        rtol: float = 1e-9,
+        atol: float = 0.0,
+    ) -> None:
+        """Advance virtual time to absolute ``t``. A past ``t`` is a no-op; ``now()`` ends exactly at ``t``.
+
+        Due sleepers wake one at a time in (deadline, registration) order. After each wake, and once
+        more when none is due, ``settle_rounds`` checkpoints run; then, if given, ``await settle()``
+        runs, and while it returns True (it waited for host-known work) the rounds and ``settle``
+        repeat. With ``settle``, this also runs first, before any wake. ``max_settles`` True results in a row raise ``RuntimeError``, leaving time at the
+        last wake. One advance at a time: a concurrent or nested one raises. See ADR 0012.
+
+        A deadline ``d`` registered before time reached ``t`` is due at ``t`` when it is close to ``t``
+        in ``math.isclose``'s symmetric sense: ``d <= t + max(rtol * max(abs(d), abs(t)), atol)``.
+        ``rtol=atol=0`` disables the tolerance.
+        """
+        if max_settles < 1:
+            raise ValueError(f"max_settles must be >= 1, got {max_settles}")
+        if rtol < 0 or atol < 0:
+            raise ValueError(f"rtol and atol must be >= 0, got rtol={rtol}, atol={atol}")
+        if self._advancing:
+            raise RuntimeError("SimClock is already advancing: one driver at a time, and not from settle()")
         if t < self._t:
             return
+        self._advancing = True
+        try:
+            await self._advance_to(t, settle, max_settles, rtol, atol)
+        finally:
+            self._advancing = False
+            for w in self._deferred:
+                heapq.heappush(self._waiters, w)
+            self._deferred.clear()
+        self._t = t
+
+    async def _advance_to(
+        self, t: float, settle: Callable[[], Awaitable[bool]] | None, max_settles: int, rtol: float, atol: float
+    ) -> None:
+        if settle is not None:  # work started before this advance (or left by a failed one) finishes at now()
+            await self._settle(settle, max_settles)
         while True:
-            self._drop_cancelled_tops()
-            if not self._waiters or self._waiters[0].deadline > t:
-                if not await self._poll_for_inrange(t):
-                    break
+            if (waiter := self._pop_due(t, rtol, atol)) is None:
+                await self._settle(settle, max_settles)  # once more at the end: woken work may sleep again in range
+                if self._pop_due(t, rtol, atol, peek=True) is None:
+                    return
                 continue
-            waiter = heapq.heappop(self._waiters)
-            if waiter.cancelled:
-                # Raced with cancellation between top-skip and pop; just retry.
-                continue
-            self._t = waiter.deadline
+            self._t = min(waiter.deadline, t)  # never past t, even for a deadline inside the tolerance
             waiter.event.set()
+            await self._settle(settle, max_settles)
+
+    def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
+        """Remove (or with ``peek``, find) the earliest sleeper due by ``t``, or ``None``.
+
+        Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t`` cannot keep
+        waking forever. Such re-sleeps are set aside until the advance ends, so they hide no older due sleeper.
+        """
+        while self._waiters:
+            w = self._waiters[0]
+            close = math.isfinite(w.deadline) and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
+            if w.cancelled or (close and w.deadline > t and w.registered_at >= t):
+                heapq.heappop(self._waiters)
+                if not w.cancelled:
+                    self._deferred.append(w)
+            elif w.deadline <= t or close:
+                return w if peek else heapq.heappop(self._waiters)
+            else:
+                return None
+        return None
+
+    async def _settle(self, settle: Callable[[], Awaitable[bool]] | None, max_settles: int) -> None:
+        """Run the round budget, then ``settle`` until it has nothing to wait for."""
+        for _ in range(max_settles):
             for _ in range(self._settle_rounds):
                 await anyio.lowlevel.checkpoint()
-        self._t = max(self._t, t)
+            if settle is None or not await settle():
+                return
+        raise RuntimeError(f"settle() still waiting after {max_settles} settles at t={self._t}")
 
     def _drop_cancelled_tops(self) -> None:
         """Pop any cancelled entries sitting at the top of the heap."""
         while self._waiters and self._waiters[0].cancelled:
             heapq.heappop(self._waiters)
 
-    async def _poll_for_inrange(self, t: float) -> bool:
-        """Settle woken tasks and report whether a due sleeper appeared."""
-        for _ in range(self._settle_rounds):
-            await anyio.lowlevel.checkpoint()
-        self._drop_cancelled_tops()
-        return bool(self._waiters) and self._waiters[0].deadline <= t
-
     async def every(self, period: float, *, first: Literal["now", "after"] = "after") -> AsyncIterator[float]:
         if period <= 0:
             raise ValueError(f"every() period must be positive, got {period}")
-        next_t = self._t if first == "now" else self._t + period
+        # Ticks are t0 + n * period, so float error does not accumulate over long runs.
+        t0, n = self._t, 0 if first == "now" else 1
         while True:
-            delta = next_t - self._t
-            if delta > 0:
+            next_t = t0 + n * period
+            if next_t > self._t:
                 await self.wait_until(next_t)
             yield next_t
             # Skip missed ticks instead of catching up in a burst.
-            next_t += period
-            now = self._t
-            while next_t <= now:
-                next_t += period
+            n += 1
+            while t0 + n * period <= self._t:
+                n += 1

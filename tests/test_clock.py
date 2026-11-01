@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import anyio
 import pytest
 
@@ -289,3 +291,337 @@ async def test_simclock_advance_breaks_early_when_no_followup_sleep() -> None:
 
     assert woke == ["d0", "d1", "d2"]
     assert clock.now() == 2.0
+
+
+async def test_simclock_every_ticks_do_not_drift() -> None:
+    """Ticks are ``t0 + n * period``: summing 0.1 a thousand times would miss these."""
+    clock = SimClock(t0=1.0)
+    ticks: list[float] = []
+
+    async def ticker() -> None:
+        async for t in clock.every(0.1):
+            ticks.append(t)
+            if len(ticks) >= 1000:
+                return
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        await anyio.sleep(0)
+        await clock.advance(100.0)
+
+    assert ticks == [1.0 + n * 0.1 for n in range(1, 1001)]
+
+
+# -- SimClock: host settle hook and deadline tolerance --------------------------
+
+
+async def test_simclock_settle_hook_waits_for_host_work_before_next_wake() -> None:
+    """A wake's host-known work, longer than the round budget, finishes before the next wake; same-deadline sleepers
+    wake in registration order and a follow-up sleep in range wakes in deadline order."""
+    clock = SimClock()
+    log: list[tuple[str, str, float]] = []
+    pending: list[anyio.Event] = []
+    calls = 0
+
+    async def settle() -> bool:
+        nonlocal calls
+        calls += 1
+        if not pending:
+            return False
+        await pending.pop().wait()
+        return True
+
+    async def sleeper(name: str, deadline: float, then: float | None = None) -> None:
+        await clock.wait_until(deadline)
+        log.append(("wake", name, clock.now()))
+        done = anyio.Event()
+        pending.append(done)
+        for _ in range(50):
+            await anyio.lowlevel.checkpoint()
+        log.append(("done", name, clock.now()))
+        done.set()
+        if then is not None:
+            await sleeper(f"{name}'", then)
+
+    async with anyio.create_task_group() as tg:
+        for name, deadline, then in [("A", 1.0, 1.5), ("D", 2.0, None), ("B", 1.0, None), ("C", 1.0, None)]:
+            tg.start_soon(sleeper, name, deadline, then)
+            await anyio.wait_all_tasks_blocked()  # registered before the next starts: trio shuffles runnable tasks
+        await clock.advance_to(2.0, settle=settle)
+
+    order = [(name, t) for kind, name, t in log if kind == "wake"]
+    assert order == [("A", 1.0), ("B", 1.0), ("C", 1.0), ("A'", 1.5), ("D", 2.0)]
+    assert [kind for kind, _, _ in log] == ["wake", "done"] * 5
+    assert calls == 1 + 5 * 2 + 1  # first; per wake one wait and one "nothing left"; after the last
+    assert clock.now() == 2.0
+
+
+async def test_simclock_settle_hook_runs_without_sleepers() -> None:
+    clock = SimClock()
+    calls = 0
+
+    async def settle() -> bool:
+        nonlocal calls
+        calls += 1
+        return False
+
+    await clock.advance(1.0, settle=settle)
+    assert (calls, clock.now()) == (2, 1.0)  # first and last
+
+
+async def test_simclock_settle_errors_and_max_settles_leave_time_at_last_wake() -> None:
+    clock = SimClock()
+    woke: list[float] = []
+
+    async def sleeper(deadline: float) -> None:
+        await clock.wait_until(deadline)
+        woke.append(clock.now())
+
+    async def failing() -> bool:
+        if woke:
+            raise ValueError("host gave up")
+        return False
+
+    async def always_waiting() -> bool:
+        return True
+
+    async with anyio.create_task_group() as tg:
+        for d in (2.0, 3.0, 5.0):
+            tg.start_soon(sleeper, d)
+        await anyio.wait_all_tasks_blocked()
+        with pytest.raises(ValueError, match="host gave up"):
+            await clock.advance_to(4.0, settle=failing)
+        assert woke == [2.0] and clock.now() == 2.0
+        with pytest.raises(RuntimeError, match="after 3 settles at t=2.0"):
+            await clock.advance_to(4.0, settle=always_waiting, max_settles=3)
+        assert woke == [2.0] and clock.now() == 2.0  # unfinished work holds time before the next wake
+        with pytest.raises(ValueError, match="max_settles"):
+            await clock.advance_to(4.0, max_settles=0)
+        tg.cancel_scope.cancel()
+
+
+async def test_simclock_round_budget_bounds_unsettled_chains() -> None:
+    """Without ``settle``, a woken chain finishes before the next wake only within ``settle_rounds`` hops."""
+
+    async def run(settle_rounds: int, hops: int) -> list[str]:
+        clock = SimClock(settle_rounds=settle_rounds)
+        log: list[str] = []
+
+        async def chained() -> None:
+            await clock.wait_until(1.0)
+            for _ in range(hops):
+                await anyio.lowlevel.checkpoint()
+            log.append("A done")
+
+        async def later() -> None:
+            await clock.wait_until(2.0)
+            log.append("B woke")
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(chained)
+            tg.start_soon(later)
+            await anyio.wait_all_tasks_blocked()
+            await clock.advance_to(3.0)
+        return log
+
+    assert await run(8, 4) == ["A done", "B woke"]
+    assert await run(64, 40) == ["A done", "B woke"]
+    assert await run(1, 40) == ["B woke", "A done"]
+
+
+async def test_simclock_tolerance_absorbs_float_mismatch_and_ends_exactly_at_t() -> None:
+    """Deadlines just past ``t`` are due at ``t`` (rtol at large t, atol near 0); ``now()`` ends exactly at ``t``."""
+
+    async def run(deadline: float, t: float, **tol: Any) -> tuple[list[float], float]:
+        clock = SimClock()
+        woke: list[float] = []
+
+        async def sleeper() -> None:
+            await clock.wait_until(deadline)
+            woke.append(clock.now())
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(sleeper)
+            await anyio.wait_all_tasks_blocked()
+            await clock.advance_to(t, **tol)  # library defaults unless given
+            end = clock.now()
+            tg.cancel_scope.cancel()
+        return woke, end
+
+    assert 0.1 * 3 > 0.3
+    assert await run(0.1 * 3, 0.3) == ([0.3], 0.3)
+    assert await run(0.1 * 3, 0.3, rtol=0.0) == ([], 0.3)
+    # Summed float drift at large t: rtol scales with |t|, an absolute 1e-9 would not.
+    drifted = sum([0.1] * 1_000_000)
+    assert drifted - 100_000.0 > 1e-6
+    assert await run(drifted, 100_000.0) == ([100_000.0], 100_000.0)
+    assert await run(drifted, 100_000.0, rtol=0.0, atol=1e-9) == ([], 100_000.0)
+    # Near 0, rtol * |t| is tiny; atol catches a deadline just past t.
+    assert await run(1e-12, 1e-13) == ([], 1e-13)
+    assert await run(1e-12, 1e-13, atol=1e-9) == ([1e-13], 1e-13)
+    with pytest.raises(ValueError, match="rtol and atol"):
+        await SimClock().advance(1.0, atol=-1.0)
+
+
+async def test_simclock_tolerance_does_not_rewake_a_sleep_registered_at_t() -> None:
+    """A re-sleep inside the tolerance of ``t`` waits for the next advance instead of looping at ``t``."""
+    clock = SimClock()
+    woke: list[float] = []
+
+    async def tiny_loop() -> None:
+        while True:
+            await clock.sleep(1e-12)
+            woke.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(tiny_loop)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(5):
+            await clock.advance_to(0.5e-12, atol=1e-9)
+        assert woke == [0.5e-12]
+        tg.cancel_scope.cancel()
+
+
+async def test_simclock_tolerance_re_sleep_does_not_hide_an_older_due_sleeper() -> None:
+    clock = SimClock()
+    woke: list[str] = []
+
+    async def first() -> None:
+        await clock.wait_until(1 + 1e-10)
+        woke.append("first")
+        await clock.sleep(1e-12)  # registered at t: ahead of second in the heap, not due at t
+        woke.append("first again")
+
+    async def second() -> None:
+        await clock.wait_until(1 + 2e-10)
+        woke.append("second")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(first)
+        await anyio.wait_all_tasks_blocked()
+        tg.start_soon(second)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+        assert woke == ["first", "second"]
+        await clock.advance_to(2.0)
+    assert woke == ["first", "second", "first again"]
+
+
+async def test_simclock_tolerance_never_wakes_an_infinite_sleep() -> None:
+    clock = SimClock()
+    woke: list[float] = []
+
+    async def forever() -> None:
+        await clock.sleep(float("inf"))
+        woke.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(forever)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+        assert woke == []
+        tg.cancel_scope.cancel()
+
+
+async def test_simclock_rejects_nested_and_concurrent_advances() -> None:
+    clock = SimClock()
+
+    async def nested() -> bool:
+        await clock.advance_to(2.0)
+        return False
+
+    with pytest.raises(RuntimeError, match="already advancing"):
+        await clock.advance_to(1.0, settle=nested)
+    assert clock.now() == 0.0
+
+    gate = anyio.Event()
+
+    async def held() -> bool:
+        await gate.wait()
+        return False
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: clock.advance_to(1.0, settle=held))
+        await anyio.wait_all_tasks_blocked()
+        with pytest.raises(RuntimeError, match="already advancing"):
+            await clock.advance_to(2.0)
+        gate.set()
+    assert clock.now() == 1.0
+    await clock.advance_to(2.0)  # the guard clears after an error too
+    assert clock.now() == 2.0
+
+
+async def test_simclock_settle_runs_before_the_first_wake_and_after_a_failed_advance() -> None:
+    """Work pending when an advance starts, or left by one that failed, finishes before the next sleeper wakes."""
+    clock = SimClock()
+    log: list[str] = []
+    state = {"busy": True, "finish": True}  # work started before the first advance
+
+    async def settle() -> bool:
+        if not state["busy"]:
+            return False
+        if state["finish"]:
+            log.append(f"settled at {clock.now()}")
+            state["busy"] = False
+        return True
+
+    async def sleeper(name: str, deadline: float) -> None:
+        await clock.wait_until(deadline)
+        log.append(name)
+        state["busy"] = True
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper, "a", 1.0)
+        await anyio.wait_all_tasks_blocked()
+        tg.start_soon(sleeper, "b", 2.0)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(0.5, settle=settle)
+        assert log == ["settled at 0.0"]
+        state["finish"] = False  # a's work outlasts the budget
+        with pytest.raises(RuntimeError, match="after 2 settles"):
+            await clock.advance_to(3.0, settle=settle, max_settles=2)
+        state["finish"] = True
+        await clock.advance_to(3.0, settle=settle)
+    assert log == ["settled at 0.0", "a", "settled at 1.0", "b", "settled at 2.0"]
+
+
+async def test_simclock_tolerance_wakes_many_sleepers_without_rescanning_the_heap() -> None:
+    """4000 sleepers at ``0.1 * 3`` wake at ``0.3`` in well under a second; a rescan per wake took ~14 s."""
+    clock = SimClock()
+    woke = 0
+
+    async def sleeper() -> None:
+        nonlocal woke
+        await clock.wait_until(0.1 * 3)
+        woke += 1
+
+    async with anyio.create_task_group() as tg:
+        for _ in range(4000):
+            tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(6):
+            await clock.advance_to(0.3)
+    assert woke == 4000
+
+
+async def test_simclock_tolerance_re_sleeps_at_t_are_set_aside_once() -> None:
+    """2000 tolerance wakes that each re-sleep inside the tolerance stay fast (re-scanning them per wake took ~10 s)."""
+    clock = SimClock()
+    woke = again = 0
+
+    async def sleeper() -> None:
+        nonlocal woke, again
+        await clock.wait_until(1 + 2e-10)
+        woke += 1
+        await clock.sleep(1e-12)
+        again += 1
+
+    async with anyio.create_task_group() as tg:
+        for _ in range(2000):
+            tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(4):
+            await clock.advance_to(1.0)
+        assert (woke, again) == (2000, 0)
+        await clock.advance_to(2.0)
+    assert again == 2000
