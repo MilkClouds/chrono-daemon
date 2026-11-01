@@ -356,11 +356,9 @@ async def test_simclock_settle_hook_wakes_one_sleeper_per_settle() -> None:
             await sleeper(f"{name}'", then)
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(sleeper, "A", 1.0, 1.5)
-        tg.start_soon(sleeper, "D", 2.0)
-        tg.start_soon(sleeper, "B", 1.0)
-        tg.start_soon(sleeper, "C", 1.0)
-        await anyio.wait_all_tasks_blocked()
+        for name, deadline, then in [("A", 1.0, 1.5), ("D", 2.0, None), ("B", 1.0, None), ("C", 1.0, None)]:
+            tg.start_soon(sleeper, name, deadline, then)
+            await anyio.wait_all_tasks_blocked()  # registered before the next starts: trio shuffles runnable tasks
         await clock.advance_to(2.0, settle=settle)
 
     order = [(name, t) for kind, name, t in log if kind == "wake"]
