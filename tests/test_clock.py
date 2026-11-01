@@ -289,3 +289,118 @@ async def test_simclock_advance_breaks_early_when_no_followup_sleep() -> None:
 
     assert woke == ["d0", "d1", "d2"]
     assert clock.now() == 2.0
+
+
+async def test_simclock_every_ticks_do_not_drift() -> None:
+    """Ticks are ``t0 + n * period``: summing 0.1 a thousand times would miss these."""
+    clock = SimClock(t0=1.0)
+    ticks: list[float] = []
+
+    async def ticker() -> None:
+        async for t in clock.every(0.1):
+            ticks.append(t)
+            if len(ticks) >= 1000:
+                return
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        await anyio.sleep(0)
+        await clock.advance(100.0)
+
+    assert ticks == [1.0 + n * 0.1 for n in range(1, 1001)]
+
+
+# -- SimClock: next_deadline and host-driven settle -----------------------------
+
+
+async def test_simclock_next_deadline_skips_cancelled_sleepers() -> None:
+    clock = SimClock()
+    assert clock.next_deadline() is None
+    early = anyio.CancelScope()
+
+    async def cancellable() -> None:
+        with early:
+            await clock.wait_until(1.0)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(clock.wait_until, 3.0)
+        tg.start_soon(cancellable)
+        await anyio.wait_all_tasks_blocked()
+        assert clock.next_deadline() == 1.0
+        early.cancel()
+        await anyio.wait_all_tasks_blocked()
+        assert clock.next_deadline() == 3.0
+        await clock.advance(5.0)
+    assert clock.next_deadline() is None
+
+
+async def test_simclock_settle_hook_wakes_one_sleeper_per_settle() -> None:
+    """Each woken sleeper's work, longer than any checkpoint budget, finishes before the next wake; same-deadline
+    sleepers wake in registration order and a follow-up sleep in range is woken in deadline order."""
+    clock = SimClock(settle_rounds=1)
+    log: list[tuple[str, str, float]] = []
+    settles = 0
+
+    async def settle() -> None:
+        nonlocal settles
+        settles += 1
+        await anyio.wait_all_tasks_blocked()
+
+    async def sleeper(name: str, deadline: float, then: float | None = None) -> None:
+        await clock.wait_until(deadline)
+        log.append(("wake", name, clock.now()))
+        for _ in range(50):
+            await anyio.lowlevel.checkpoint()
+        log.append(("done", name, clock.now()))
+        if then is not None:
+            await sleeper(f"{name}'", then)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper, "A", 1.0, 1.5)
+        tg.start_soon(sleeper, "D", 2.0)
+        tg.start_soon(sleeper, "B", 1.0)
+        tg.start_soon(sleeper, "C", 1.0)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(2.0, settle=settle)
+
+    order = [(name, t) for kind, name, t in log if kind == "wake"]
+    assert order == [("A", 1.0), ("B", 1.0), ("C", 1.0), ("A'", 1.5), ("D", 2.0)]
+    assert [kind for kind, _, _ in log] == ["wake", "done"] * 5
+    assert settles == 6  # before each wake and after the last
+    assert clock.now() == 2.0
+
+
+async def test_simclock_settle_hook_runs_without_sleepers_and_stops_on_error() -> None:
+    clock = SimClock()
+    calls = 0
+
+    async def settle() -> None:
+        nonlocal calls
+        calls += 1
+
+    await clock.advance(1.0, settle=settle)
+    assert (calls, clock.now()) == (1, 1.0)
+
+    woke: list[float] = []
+
+    async def sleeper(deadline: float) -> None:
+        await clock.wait_until(deadline)
+        woke.append(clock.now())
+
+    async def failing() -> None:
+        await anyio.wait_all_tasks_blocked()
+        if woke:
+            raise RuntimeError("host gave up")
+
+    error: RuntimeError | None = None
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper, 2.0)
+        tg.start_soon(sleeper, 3.0)
+        await anyio.wait_all_tasks_blocked()
+        try:
+            await clock.advance_to(4.0, settle=failing)
+        except RuntimeError as exc:
+            error = exc
+        tg.cancel_scope.cancel()
+    assert str(error) == "host gave up"
+    assert woke == [2.0] and clock.now() == 2.0  # time stays at the last wake

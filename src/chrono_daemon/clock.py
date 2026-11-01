@@ -9,7 +9,7 @@ from __future__ import annotations
 import heapq
 import itertools
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -96,7 +96,8 @@ class SimClock:
 
     Time only moves when a driver task calls ``advance(dt)`` or ``advance_to(t)``.
     All sleepers are released exactly at their registered deadline, in deadline order,
-    with insertion order as the tiebreaker.
+    with insertion order as the tiebreaker. A driver that knows when woken work has
+    finished passes ``settle=`` to wake one sleeper per settle; see ADR 0012.
     """
 
     def __init__(self, t0: float = 0.0, *, settle_rounds: int = _DEFAULT_SETTLE_ROUNDS) -> None:
@@ -137,15 +138,27 @@ class SimClock:
                 while self._waiters and self._waiters[0].cancelled:
                     heapq.heappop(self._waiters)
 
-    async def advance(self, dt: float) -> None:
-        """Advance virtual time by ``dt`` seconds."""
+    def next_deadline(self) -> float | None:
+        """Deadline of the earliest pending sleeper, or ``None`` if none is pending."""
+        self._drop_cancelled_tops()
+        return self._waiters[0].deadline if self._waiters else None
+
+    async def advance(self, dt: float, *, settle: Callable[[], Awaitable[object]] | None = None) -> None:
+        """Advance virtual time by ``dt`` seconds (``settle`` as in ``advance_to``)."""
         if dt < 0:
             raise ValueError(f"cannot advance backwards (dt={dt})")
-        await self.advance_to(self._t + dt)
+        await self.advance_to(self._t + dt, settle=settle)
 
-    async def advance_to(self, t: float) -> None:
-        """Advance virtual time to absolute ``t``."""
+    async def advance_to(self, t: float, *, settle: Callable[[], Awaitable[object]] | None = None) -> None:
+        """Advance virtual time to absolute ``t``. A past ``t`` is a no-op.
+
+        With ``settle``, sleepers due by ``t`` are woken one at a time and ``await settle()``
+        runs before each wake and after the last, in place of the ``settle_rounds`` budget.
+        """
         if t < self._t:
+            return
+        if settle is not None:
+            await self._advance_settled(t, settle)
             return
         while True:
             self._drop_cancelled_tops()
@@ -163,6 +176,17 @@ class SimClock:
                 await anyio.lowlevel.checkpoint()
         self._t = max(self._t, t)
 
+    async def _advance_settled(self, t: float, settle: Callable[[], Awaitable[object]]) -> None:
+        while True:
+            await settle()
+            # No await between this check and the wake, so the popped waiter is live.
+            if (deadline := self.next_deadline()) is None or deadline > t:
+                break
+            waiter = heapq.heappop(self._waiters)
+            self._t = deadline
+            waiter.event.set()
+        self._t = max(self._t, t)
+
     def _drop_cancelled_tops(self) -> None:
         """Pop any cancelled entries sitting at the top of the heap."""
         while self._waiters and self._waiters[0].cancelled:
@@ -178,14 +202,14 @@ class SimClock:
     async def every(self, period: float, *, first: Literal["now", "after"] = "after") -> AsyncIterator[float]:
         if period <= 0:
             raise ValueError(f"every() period must be positive, got {period}")
-        next_t = self._t if first == "now" else self._t + period
+        # Ticks are t0 + n * period, so float error does not accumulate over long runs.
+        t0, n = self._t, 0 if first == "now" else 1
         while True:
-            delta = next_t - self._t
-            if delta > 0:
+            next_t = t0 + n * period
+            if next_t > self._t:
                 await self.wait_until(next_t)
             yield next_t
             # Skip missed ticks instead of catching up in a burst.
-            next_t += period
-            now = self._t
-            while next_t <= now:
-                next_t += period
+            n += 1
+            while t0 + n * period <= self._t:
+                n += 1
