@@ -480,3 +480,28 @@ async def test_simclock_tolerance_does_not_rewake_a_sleep_registered_at_t() -> N
             await clock.advance_to(0.5e-12, atol=1e-9)
         assert woke == [0.5e-12]
         tg.cancel_scope.cancel()
+
+
+async def test_simclock_tolerance_re_sleep_does_not_hide_an_older_due_sleeper() -> None:
+    clock = SimClock()
+    woke: list[str] = []
+
+    async def first() -> None:
+        await clock.wait_until(1 + 1e-10)
+        woke.append("first")
+        await clock.sleep(1e-12)  # registered at t: ahead of second in the heap, not due at t
+        woke.append("first again")
+
+    async def second() -> None:
+        await clock.wait_until(1 + 2e-10)
+        woke.append("second")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(first)
+        await anyio.wait_all_tasks_blocked()
+        tg.start_soon(second)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+        assert woke == ["first", "second"]
+        await clock.advance_to(2.0)
+    assert woke == ["first", "second", "first again"]

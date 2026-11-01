@@ -183,33 +183,42 @@ class SimClock:
         if t < self._t:
             return
         while True:
-            if self._due(t, rtol, atol):
-                waiter = heapq.heappop(self._waiters)
+            if (waiter := self._pop_due(t, rtol, atol)) is not None:
                 # Never past t, so now() ends exactly at t even for a deadline inside the tolerance.
                 self._t = min(waiter.deadline, t)
                 waiter.event.set()
             else:
                 await self._settle(settle, max_settles)
-                if not self._due(t, rtol, atol):
+                if self._pop_due(t, rtol, atol, peek=True) is None:
                     break
                 continue
             await self._settle(settle, max_settles)
         self._t = t
 
-    def _due(self, t: float, rtol: float, atol: float) -> bool:
-        """Whether the earliest live sleeper is due by ``t``.
+    def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
+        """Remove and return the earliest sleeper due by ``t``, or ``None``.
 
-        Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t``
-        cannot keep waking forever.
+        Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t`` cannot keep
+        waking forever (nor hide an older sleeper due within it).
         """
         self._drop_cancelled_tops()
         if not self._waiters:
-            return False
-        w = self._waiters[0]
-        if w.deadline <= t:
-            return True
-        tol = max(rtol * max(abs(w.deadline), abs(t)), atol)
-        return w.registered_at < t and w.deadline <= t + tol
+            return None
+        if self._waiters[0].deadline <= t:
+            return self._waiters[0] if peek else heapq.heappop(self._waiters)
+        due = [
+            w
+            for w in self._waiters
+            if not w.cancelled
+            and w.registered_at < t
+            and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
+        ]
+        if not due or peek:
+            return min(due, default=None)
+        waiter = min(due)
+        self._waiters = [w for w in self._waiters if w is not waiter]
+        heapq.heapify(self._waiters)
+        return waiter
 
     async def _settle(self, settle: Callable[[], Awaitable[bool]] | None, max_settles: int) -> None:
         """Run the round budget, then ``settle`` until it has nothing to wait for."""
