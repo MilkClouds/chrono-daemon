@@ -209,30 +209,27 @@ class SimClock:
             await self._settle(settle, max_settles)
 
     def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
-        """Remove and return the earliest sleeper due by ``t``, or ``None``.
+        """Remove (or with ``peek``, find) the earliest sleeper due by ``t``, or ``None``.
 
         Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t`` cannot keep
-        waking forever (nor hide an older sleeper due within it).
+        waking forever; such re-sleeps are stepped over, not woken, so they hide no older sleeper due within it.
         """
-        self._drop_cancelled_tops()
-        if not self._waiters:
-            return None
-        if self._waiters[0].deadline <= t:
-            return self._waiters[0] if peek else heapq.heappop(self._waiters)
-        due = [
-            w
-            for w in self._waiters
-            if not w.cancelled
-            and math.isfinite(w.deadline)
-            and w.registered_at < t
-            and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
-        ]
-        if not due or peek:
-            return min(due, default=None)
-        waiter = min(due)
-        self._waiters = [w for w in self._waiters if w is not waiter]
-        heapq.heapify(self._waiters)
-        return waiter
+        held: list[_Waiter] = []
+        found = None
+        while self._waiters:
+            w = heapq.heappop(self._waiters)
+            if w.cancelled:
+                continue
+            close = math.isfinite(w.deadline) and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
+            if w.deadline <= t or (close and w.registered_at < t):
+                found = w
+                break
+            held.append(w)
+            if not close:
+                break
+        for w in held + ([found] if peek and found is not None else []):
+            heapq.heappush(self._waiters, w)
+        return found
 
     async def _settle(self, settle: Callable[[], Awaitable[bool]] | None, max_settles: int) -> None:
         """Run the round budget, then ``settle`` until it has nothing to wait for."""

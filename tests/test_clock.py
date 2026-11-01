@@ -583,3 +583,22 @@ async def test_simclock_settle_runs_before_the_first_wake_and_after_a_failed_adv
         state["finish"] = True
         await clock.advance_to(3.0, settle=settle)
     assert log == ["settled at 0.0", "a", "settled at 1.0", "b", "settled at 2.0"]
+
+
+async def test_simclock_tolerance_wakes_many_sleepers_without_rescanning_the_heap() -> None:
+    """4000 sleepers at ``0.1 * 3`` wake at ``0.3`` in well under a second; a rescan per wake took ~14 s."""
+    clock = SimClock()
+    woke = 0
+
+    async def sleeper() -> None:
+        nonlocal woke
+        await clock.wait_until(0.1 * 3)
+        woke += 1
+
+    async with anyio.create_task_group() as tg:
+        for _ in range(4000):
+            tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(6):
+            await clock.advance_to(0.3)
+    assert woke == 4000
