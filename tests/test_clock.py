@@ -625,3 +625,71 @@ async def test_simclock_tolerance_re_sleeps_at_t_are_set_aside_once() -> None:
         assert (woke, again) == (2000, 0)
         await clock.advance_to(2.0)
     assert again == 2000
+
+
+async def test_simclock_exclusive_advance_leaves_sleepers_at_t_for_the_next_advance() -> None:
+    """``inclusive=False`` wakes what is due before ``t``, ends at ``t``, and leaves ``t``'s sleepers (both sides of
+    the tolerance) to a following ``advance_to(t)``, which sees the host's input for ``t`` first."""
+    clock = SimClock()
+    log: list[tuple[str, float, Any]] = []
+    inbox: list[str] = []
+
+    async def sleeper(name: str, deadline: float) -> None:
+        await clock.wait_until(deadline)
+        log.append((name, clock.now(), list(inbox)))
+
+    below = 0.3 - 0.3 * 1e-12
+    assert 0.1 * 3 > 0.3 > below
+    async with anyio.create_task_group() as tg:
+        for name, deadline in [("early", 0.2), ("above", 0.1 * 3), ("exact", 0.3), ("below", below), ("late", 0.4)]:
+            tg.start_soon(sleeper, name, deadline)
+            await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(0.3, inclusive=False)
+        assert clock.now() == 0.3
+        assert log == [("early", 0.2, [])]
+        inbox.append("obs@0.3")
+        await clock.advance_to(0.3)
+        assert [name for name, *_ in log] == ["early", "below", "exact", "above"]
+        assert all(now == 0.3 and seen == ["obs@0.3"] for _, now, seen in log[1:])
+        await clock.advance(0.1, inclusive=False)  # `advance` forwards it; a deadline exactly at t stays
+        assert [name for name, *_ in log][-1] == "above"
+        await clock.advance_to(0.4)
+        assert log[-1][:2] == ("late", 0.4)
+        # rtol=atol=0: only exactly t stays; just below it is before t.
+        tg.start_soon(sleeper, "tight-below", 0.5 - 1e-15)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(0.5, inclusive=False, rtol=0.0)
+        assert log[-1][0] == "tight-below"
+
+
+async def test_simclock_exclusive_then_inclusive_runs_input_work_before_timers_at_t() -> None:
+    """Work the host's input starts at ``t`` settles (pre-wake settle) before a sleeper due at ``t`` wakes."""
+    clock = SimClock()
+    log: list[str] = []
+    pending = {"n": 0}
+    done = anyio.Event()
+
+    async def settle() -> bool:
+        if not pending["n"]:
+            return False
+        await done.wait()
+        pending["n"] = 0
+        return True
+
+    async def tick() -> None:
+        await clock.wait_until(1.0)
+        log.append(f"tick@{clock.now()}")
+
+    async def handle_input() -> None:
+        await anyio.sleep(0.01)  # real work outside the clock, tracked by the host
+        log.append(f"input@{clock.now()}")
+        done.set()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(tick)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0, settle=settle, inclusive=False)
+        pending["n"] = 1
+        tg.start_soon(handle_input)
+        await clock.advance_to(1.0, settle=settle)
+    assert log == ["input@1.0", "tick@1.0"]

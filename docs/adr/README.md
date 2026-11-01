@@ -31,3 +31,4 @@ number: `000N-short-summary.md`.
 - [0010: Channel endpoints are single-owner](0010-channel-endpoints-are-single-owner.md)
 - [0011: ZMQ transport ships as an optional extra](0011-zmq-transport-extra.md)
 - [0012: SimClock settle hook and deadline tolerance](0012-simclock-settle-hook-and-tolerance.md)
+- [0013: Exclusive SimClock advance for host input at t](0013-exclusive-simclock-advance.md)

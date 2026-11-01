@@ -152,11 +152,14 @@ class SimClock:
         max_settles: int = _DEFAULT_MAX_SETTLES,
         rtol: float = 1e-9,
         atol: float = 0.0,
+        inclusive: bool = True,
     ) -> None:
         """Advance virtual time by ``dt`` seconds; keywords as in ``advance_to``."""
         if dt < 0:
             raise ValueError(f"cannot advance backwards (dt={dt})")
-        await self.advance_to(self._t + dt, settle=settle, max_settles=max_settles, rtol=rtol, atol=atol)
+        await self.advance_to(
+            self._t + dt, settle=settle, max_settles=max_settles, rtol=rtol, atol=atol, inclusive=inclusive
+        )
 
     async def advance_to(
         self,
@@ -166,6 +169,7 @@ class SimClock:
         max_settles: int = _DEFAULT_MAX_SETTLES,
         rtol: float = 1e-9,
         atol: float = 0.0,
+        inclusive: bool = True,
     ) -> None:
         """Advance virtual time to absolute ``t``. A past ``t`` is a no-op; ``now()`` ends exactly at ``t``.
 
@@ -178,6 +182,10 @@ class SimClock:
         A deadline ``d`` registered before time reached ``t`` is due at ``t`` when it is close to ``t``
         in ``math.isclose``'s symmetric sense: ``d <= t + max(rtol * max(abs(d), abs(t)), atol)``.
         ``rtol=atol=0`` disables the tolerance.
+
+        ``inclusive=False`` wakes only sleepers due before ``t`` (not at ``t``, nor within its tolerance) and still
+        ends with ``now() == t``; a following ``advance_to(t)`` wakes those, so a host can deliver input for ``t``
+        first. See ADR 0013.
         """
         if max_settles < 1:
             raise ValueError(f"max_settles must be >= 1, got {max_settles}")
@@ -189,7 +197,7 @@ class SimClock:
             return
         self._advancing = True
         try:
-            await self._advance_to(t, settle, max_settles, rtol, atol)
+            await self._advance_to(t, settle, max_settles, rtol, atol, inclusive)
         finally:
             self._advancing = False
             for w in self._deferred:
@@ -198,22 +206,29 @@ class SimClock:
         self._t = t
 
     async def _advance_to(
-        self, t: float, settle: Callable[[], Awaitable[bool]] | None, max_settles: int, rtol: float, atol: float
+        self,
+        t: float,
+        settle: Callable[[], Awaitable[bool]] | None,
+        max_settles: int,
+        rtol: float,
+        atol: float,
+        inclusive: bool,
     ) -> None:
         if settle is not None:  # work started before this advance (or left by a failed one) finishes at now()
             await self._settle(settle, max_settles)
         while True:
-            if (waiter := self._pop_due(t, rtol, atol)) is None:
+            if (waiter := self._pop_due(t, rtol, atol, inclusive)) is None:
                 await self._settle(settle, max_settles)  # once more at the end: woken work may sleep again in range
-                if self._pop_due(t, rtol, atol, peek=True) is None:
+                if self._pop_due(t, rtol, atol, inclusive, peek=True) is None:
                     return
                 continue
-            self._t = min(waiter.deadline, t)  # never past t, even for a deadline inside the tolerance
+            # Never past t (a deadline inside the tolerance), never back (one left at t by an exclusive advance).
+            self._t = max(self._t, min(waiter.deadline, t))
             waiter.event.set()
             await self._settle(settle, max_settles)
 
-    def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
-        """Remove (or with ``peek``, find) the earliest sleeper due by ``t``, or ``None``.
+    def _pop_due(self, t: float, rtol: float, atol: float, inclusive: bool, *, peek: bool = False) -> _Waiter | None:
+        """Remove (or with ``peek``, find) the earliest sleeper due by ``t`` (before ``t`` unless ``inclusive``).
 
         Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t`` cannot keep
         waking forever. Such re-sleeps are set aside until the advance ends, so they hide no older due sleeper.
@@ -221,6 +236,8 @@ class SimClock:
         while self._waiters:
             w = self._waiters[0]
             close = math.isfinite(w.deadline) and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
+            if not inclusive and not w.cancelled and w.deadline >= t - max(rtol * max(abs(w.deadline), abs(t)), atol):
+                return None  # at t, from either side within the tolerance: left for the next advance
             if w.cancelled or (close and w.deadline > t and w.registered_at >= t):
                 heapq.heappop(self._waiters)
                 if not w.cancelled:

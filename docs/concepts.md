@@ -43,6 +43,8 @@ A small protocol with `now()`, `async sleep(seconds)`,
   with a settle budget for follow-up sleeps; see ADR 0002. A host that tracks
   its own pending work passes `advance_to(t, settle=...)` to wait for it
   between wakes; deadlines within `rtol`/`atol` of `t` count as due; see ADR 0012.
+  `advance_to(t, inclusive=False)` stops short of `t`'s sleepers, so a host can
+  deliver its input for `t` first; see ADR 0013.
 
 Daemons must reach for `ctx.clock.sleep(...)`, not `anyio.sleep(...)`
 directly, or `SimClock` cannot intercept time. The reasoning is in ADR 0002.
