@@ -27,8 +27,10 @@ meant for `t` lands just past it and fires one step late.
   is due, the `settle_rounds` checkpoints run; then `await settle()` runs if
   given. It returns True if it waited for something, and the rounds and
   `settle` repeat so continuations run before the next wake; False ends the
-  loop. `max_settles` True results in a row raise `RuntimeError`: time must
-  not move on silently. Without `settle`, behaviour is ADR 0002's.
+  loop. With `settle`, the same loop also runs first, so work started before
+  the advance (or left by one that failed) finishes at the current time.
+  `max_settles` True results in a row raise `RuntimeError`: time must not
+  move on silently. Without `settle`, behaviour is ADR 0002's.
 - `settle` does not detect global completion. It is a hook for host-known work
   on top of the round heuristic; work the host does not track still relies on
   `settle_rounds`.

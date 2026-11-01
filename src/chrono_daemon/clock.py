@@ -171,7 +171,7 @@ class SimClock:
         Due sleepers wake one at a time in (deadline, registration) order. After each wake, and once
         more when none is due, ``settle_rounds`` checkpoints run; then, if given, ``await settle()``
         runs, and while it returns True (it waited for host-known work) the rounds and ``settle``
-        repeat. ``max_settles`` True results in a row raise ``RuntimeError``, leaving time at the
+        repeat. With ``settle``, this also runs first, before any wake. ``max_settles`` True results in a row raise ``RuntimeError``, leaving time at the
         last wake. One advance at a time: a concurrent or nested one raises. See ADR 0012.
 
         A deadline ``d`` registered before time reached ``t`` is due at ``t`` when it is close to ``t``
@@ -196,6 +196,8 @@ class SimClock:
     async def _advance_to(
         self, t: float, settle: Callable[[], Awaitable[bool]] | None, max_settles: int, rtol: float, atol: float
     ) -> None:
+        if settle is not None:  # work started before this advance (or left by a failed one) finishes at now()
+            await self._settle(settle, max_settles)
         while True:
             if (waiter := self._pop_due(t, rtol, atol)) is None:
                 await self._settle(settle, max_settles)  # once more at the end: woken work may sleep again in range

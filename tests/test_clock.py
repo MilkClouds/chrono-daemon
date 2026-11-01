@@ -352,7 +352,7 @@ async def test_simclock_settle_hook_waits_for_host_work_before_next_wake() -> No
     order = [(name, t) for kind, name, t in log if kind == "wake"]
     assert order == [("A", 1.0), ("B", 1.0), ("C", 1.0), ("A'", 1.5), ("D", 2.0)]
     assert [kind for kind, _, _ in log] == ["wake", "done"] * 5
-    assert calls == 5 * 2 + 1  # per wake: one wait and one "nothing left"; one more after the last
+    assert calls == 1 + 5 * 2 + 1  # first; per wake one wait and one "nothing left"; after the last
     assert clock.now() == 2.0
 
 
@@ -366,7 +366,7 @@ async def test_simclock_settle_hook_runs_without_sleepers() -> None:
         return False
 
     await clock.advance(1.0, settle=settle)
-    assert (calls, clock.now()) == (1, 1.0)
+    assert (calls, clock.now()) == (2, 1.0)  # first and last
 
 
 async def test_simclock_settle_errors_and_max_settles_leave_time_at_last_wake() -> None:
@@ -392,9 +392,9 @@ async def test_simclock_settle_errors_and_max_settles_leave_time_at_last_wake() 
         with pytest.raises(ValueError, match="host gave up"):
             await clock.advance_to(4.0, settle=failing)
         assert woke == [2.0] and clock.now() == 2.0
-        with pytest.raises(RuntimeError, match="after 3 settles"):
+        with pytest.raises(RuntimeError, match="after 3 settles at t=2.0"):
             await clock.advance_to(4.0, settle=always_waiting, max_settles=3)
-        assert woke == [2.0, 3.0] and clock.now() == 3.0
+        assert woke == [2.0] and clock.now() == 2.0  # unfinished work holds time before the next wake
         with pytest.raises(ValueError, match="max_settles"):
             await clock.advance_to(4.0, max_settles=0)
         tg.cancel_scope.cancel()
@@ -549,3 +549,37 @@ async def test_simclock_rejects_nested_and_concurrent_advances() -> None:
     assert clock.now() == 1.0
     await clock.advance_to(2.0)  # the guard clears after an error too
     assert clock.now() == 2.0
+
+
+async def test_simclock_settle_runs_before_the_first_wake_and_after_a_failed_advance() -> None:
+    """Work pending when an advance starts, or left by one that failed, finishes before the next sleeper wakes."""
+    clock = SimClock()
+    log: list[str] = []
+    state = {"busy": True, "finish": True}  # work started before the first advance
+
+    async def settle() -> bool:
+        if not state["busy"]:
+            return False
+        if state["finish"]:
+            log.append(f"settled at {clock.now()}")
+            state["busy"] = False
+        return True
+
+    async def sleeper(name: str, deadline: float) -> None:
+        await clock.wait_until(deadline)
+        log.append(name)
+        state["busy"] = True
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper, "a", 1.0)
+        await anyio.wait_all_tasks_blocked()
+        tg.start_soon(sleeper, "b", 2.0)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(0.5, settle=settle)
+        assert log == ["settled at 0.0"]
+        state["finish"] = False  # a's work outlasts the budget
+        with pytest.raises(RuntimeError, match="after 2 settles"):
+            await clock.advance_to(3.0, settle=settle, max_settles=2)
+        state["finish"] = True
+        await clock.advance_to(3.0, settle=settle)
+    assert log == ["settled at 0.0", "a", "settled at 1.0", "b", "settled at 2.0"]
