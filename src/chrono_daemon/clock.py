@@ -115,6 +115,7 @@ class SimClock:
         self._waiters: list[_Waiter] = []
         self._seq = itertools.count()
         self._advancing = False
+        self._deferred: list[_Waiter] = []  # re-sleeps at the target inside its tolerance, back in the heap after
 
     def now(self) -> float:
         return self._t
@@ -191,6 +192,9 @@ class SimClock:
             await self._advance_to(t, settle, max_settles, rtol, atol)
         finally:
             self._advancing = False
+            for w in self._deferred:
+                heapq.heappush(self._waiters, w)
+            self._deferred.clear()
         self._t = t
 
     async def _advance_to(
@@ -212,24 +216,20 @@ class SimClock:
         """Remove (or with ``peek``, find) the earliest sleeper due by ``t``, or ``None``.
 
         Only sleepers registered before time reached ``t`` get the tolerance, so a tiny re-sleep at ``t`` cannot keep
-        waking forever; such re-sleeps are stepped over, not woken, so they hide no older sleeper due within it.
+        waking forever. Such re-sleeps are set aside until the advance ends, so they hide no older due sleeper.
         """
-        held: list[_Waiter] = []
-        found = None
         while self._waiters:
-            w = heapq.heappop(self._waiters)
-            if w.cancelled:
-                continue
+            w = self._waiters[0]
             close = math.isfinite(w.deadline) and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
-            if w.deadline <= t or (close and w.registered_at < t):
-                found = w
-                break
-            held.append(w)
-            if not close:
-                break
-        for w in held + ([found] if peek and found is not None else []):
-            heapq.heappush(self._waiters, w)
-        return found
+            if w.cancelled or (close and w.deadline > t and w.registered_at >= t):
+                heapq.heappop(self._waiters)
+                if not w.cancelled:
+                    self._deferred.append(w)
+            elif w.deadline <= t or close:
+                return w if peek else heapq.heappop(self._waiters)
+            else:
+                return None
+        return None
 
     async def _settle(self, settle: Callable[[], Awaitable[bool]] | None, max_settles: int) -> None:
         """Run the round budget, then ``settle`` until it has nothing to wait for."""

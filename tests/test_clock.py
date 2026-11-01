@@ -602,3 +602,26 @@ async def test_simclock_tolerance_wakes_many_sleepers_without_rescanning_the_hea
         with anyio.fail_after(6):
             await clock.advance_to(0.3)
     assert woke == 4000
+
+
+async def test_simclock_tolerance_re_sleeps_at_t_are_set_aside_once() -> None:
+    """2000 tolerance wakes that each re-sleep inside the tolerance stay fast (re-scanning them per wake took ~10 s)."""
+    clock = SimClock()
+    woke = again = 0
+
+    async def sleeper() -> None:
+        nonlocal woke, again
+        await clock.wait_until(1 + 2e-10)
+        woke += 1
+        await clock.sleep(1e-12)
+        again += 1
+
+    async with anyio.create_task_group() as tg:
+        for _ in range(2000):
+            tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        with anyio.fail_after(4):
+            await clock.advance_to(1.0)
+        assert (woke, again) == (2000, 0)
+        await clock.advance_to(2.0)
+    assert again == 2000
