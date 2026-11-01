@@ -197,15 +197,13 @@ class SimClock:
         self, t: float, settle: Callable[[], Awaitable[bool]] | None, max_settles: int, rtol: float, atol: float
     ) -> None:
         while True:
-            if (waiter := self._pop_due(t, rtol, atol)) is not None:
-                # Never past t, so now() ends exactly at t even for a deadline inside the tolerance.
-                self._t = min(waiter.deadline, t)
-                waiter.event.set()
-            else:
-                await self._settle(settle, max_settles)
+            if (waiter := self._pop_due(t, rtol, atol)) is None:
+                await self._settle(settle, max_settles)  # once more at the end: woken work may sleep again in range
                 if self._pop_due(t, rtol, atol, peek=True) is None:
-                    break
+                    return
                 continue
+            self._t = min(waiter.deadline, t)  # never past t, even for a deadline inside the tolerance
+            waiter.event.set()
             await self._settle(settle, max_settles)
 
     def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
