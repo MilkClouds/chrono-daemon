@@ -505,3 +505,47 @@ async def test_simclock_tolerance_re_sleep_does_not_hide_an_older_due_sleeper() 
         assert woke == ["first", "second"]
         await clock.advance_to(2.0)
     assert woke == ["first", "second", "first again"]
+
+
+async def test_simclock_tolerance_never_wakes_an_infinite_sleep() -> None:
+    clock = SimClock()
+    woke: list[float] = []
+
+    async def forever() -> None:
+        await clock.sleep(float("inf"))
+        woke.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(forever)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+        assert woke == []
+        tg.cancel_scope.cancel()
+
+
+async def test_simclock_rejects_nested_and_concurrent_advances() -> None:
+    clock = SimClock()
+
+    async def nested() -> bool:
+        await clock.advance_to(2.0)
+        return False
+
+    with pytest.raises(RuntimeError, match="already advancing"):
+        await clock.advance_to(1.0, settle=nested)
+    assert clock.now() == 0.0
+
+    gate = anyio.Event()
+
+    async def held() -> bool:
+        await gate.wait()
+        return False
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: clock.advance_to(1.0, settle=held))
+        await anyio.wait_all_tasks_blocked()
+        with pytest.raises(RuntimeError, match="already advancing"):
+            await clock.advance_to(2.0)
+        gate.set()
+    assert clock.now() == 1.0
+    await clock.advance_to(2.0)  # the guard clears after an error too
+    assert clock.now() == 2.0

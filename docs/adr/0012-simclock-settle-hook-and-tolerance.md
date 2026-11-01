@@ -38,6 +38,9 @@ meant for `t` lands just past it and fires one step late.
   sleeper woken inside the tolerance sees `now() == t`, never later, and
   `now()` ends exactly at `t`. Only sleepers registered before time reached
   `t` get the tolerance, so a tiny re-sleep at `t` cannot loop forever.
+  Infinite deadlines never get it.
+- One advance at a time: an `advance_to` that starts while another runs
+  (from another task, or from `settle`) raises, so time cannot rewind.
 - `every()` computes ticks as `t0 + n * period` instead of summing `period`,
   so ticks do not drift off a host's grid over long runs.
 - No public `next_deadline()`: hosts get same-instant handling from the

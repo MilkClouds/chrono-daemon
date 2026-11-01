@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import math
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -113,6 +114,7 @@ class SimClock:
         # and are skipped on pop.
         self._waiters: list[_Waiter] = []
         self._seq = itertools.count()
+        self._advancing = False
 
     def now(self) -> float:
         return self._t
@@ -170,7 +172,7 @@ class SimClock:
         more when none is due, ``settle_rounds`` checkpoints run; then, if given, ``await settle()``
         runs, and while it returns True (it waited for host-known work) the rounds and ``settle``
         repeat. ``max_settles`` True results in a row raise ``RuntimeError``, leaving time at the
-        last wake. See ADR 0012.
+        last wake. One advance at a time: a concurrent or nested one raises. See ADR 0012.
 
         A deadline ``d`` registered before time reached ``t`` is due at ``t`` when it is close to ``t``
         in ``math.isclose``'s symmetric sense: ``d <= t + max(rtol * max(abs(d), abs(t)), atol)``.
@@ -180,8 +182,20 @@ class SimClock:
             raise ValueError(f"max_settles must be >= 1, got {max_settles}")
         if rtol < 0 or atol < 0:
             raise ValueError(f"rtol and atol must be >= 0, got rtol={rtol}, atol={atol}")
+        if self._advancing:
+            raise RuntimeError("SimClock is already advancing: one driver at a time, and not from settle()")
         if t < self._t:
             return
+        self._advancing = True
+        try:
+            await self._advance_to(t, settle, max_settles, rtol, atol)
+        finally:
+            self._advancing = False
+        self._t = t
+
+    async def _advance_to(
+        self, t: float, settle: Callable[[], Awaitable[bool]] | None, max_settles: int, rtol: float, atol: float
+    ) -> None:
         while True:
             if (waiter := self._pop_due(t, rtol, atol)) is not None:
                 # Never past t, so now() ends exactly at t even for a deadline inside the tolerance.
@@ -193,7 +207,6 @@ class SimClock:
                     break
                 continue
             await self._settle(settle, max_settles)
-        self._t = t
 
     def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
         """Remove and return the earliest sleeper due by ``t``, or ``None``.
@@ -210,6 +223,7 @@ class SimClock:
             w
             for w in self._waiters
             if not w.cancelled
+            and math.isfinite(w.deadline)
             and w.registered_at < t
             and w.deadline <= t + max(rtol * max(abs(w.deadline), abs(t)), atol)
         ]
