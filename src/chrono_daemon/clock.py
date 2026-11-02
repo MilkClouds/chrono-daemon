@@ -214,10 +214,9 @@ class SimClock:
             await self._advance_to(t, settle, max_settles, rtol, atol)
         finally:
             self._advancing = False
-            for w in (*self._deferred, *(w for _, _, w in self._instant)):
+            for w in self._deferred:
                 heapq.heappush(self._waiters, w)
-            self._deferred.clear()
-            self._instant.clear()
+            self._deferred.clear()  # an instant left by a failure stays whole for the next advance
         self._t = t
 
     async def _advance_to(

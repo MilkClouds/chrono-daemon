@@ -771,3 +771,19 @@ async def test_simclock_entries_registered_by_an_instants_last_entry_still_go_by
     clock.call_at(1.0, last)
     await clock.advance_to(1.0)
     assert log == ["now, -10", "past, 10"]
+
+
+async def test_simclock_an_instant_interrupted_by_an_error_keeps_its_order_on_retry() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock.call_at(0.3, boom, priority=-10)
+    clock.call_at(0.3, lambda: log.append("5"), priority=5)
+    clock.call_at(0.1 * 3, lambda: log.append("0"))  # above 0.3, inside the tolerance: same instant
+    with pytest.raises(ValueError, match="boom"):
+        await clock.advance_to(0.3)
+    await clock.advance_to(0.3)
+    assert log == ["0", "5"] and clock.now() == 0.3
