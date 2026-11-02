@@ -625,3 +625,260 @@ async def test_simclock_tolerance_re_sleeps_at_t_are_set_aside_once() -> None:
         assert (woke, again) == (2000, 0)
         await clock.advance_to(2.0)
     assert again == 2000
+
+
+async def test_simclock_priority_orders_one_instant_including_float_close_deadlines() -> None:
+    """At one instant (deadlines within the tolerance of each other) wakes go by priority, then registration, and
+    all see one ``now()``; ``call_at`` callbacks take part like sleepers."""
+    clock = SimClock()
+    log: list[tuple[str, float]] = []
+
+    async def sleeper(name: str, deadline: float, priority: int = 0) -> None:
+        await clock.wait_until(deadline, priority=priority)
+        log.append((name, clock.now()))
+
+    below = 0.3 - 0.3 * 1e-12
+    assert 0.1 * 3 > 0.3 > below
+    async with anyio.create_task_group() as tg:
+        for name, deadline, priority in [
+            ("early", 0.2, 0),
+            ("below", below, 0),
+            ("above", 0.1 * 3, 0),
+            ("exact", 0.3, 0),
+            ("first", 0.3, -1),
+        ]:
+            tg.start_soon(sleeper, name, deadline, priority)
+            await anyio.wait_all_tasks_blocked()
+        clock.call_at(0.3, lambda: log.append(("input", clock.now())), priority=-2)
+        await clock.advance_to(0.3)
+        tg.start_soon(sleeper, "inner-late", 0.5 + 0.5 * 1e-12)
+        tg.start_soon(sleeper, "inner", 0.5, 1)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)  # an instant inside the advance: now() is its latest deadline
+    assert log == [
+        ("early", 0.2),
+        ("input", 0.3),
+        ("first", 0.3),
+        ("below", 0.3),
+        ("above", 0.3),
+        ("exact", 0.3),
+        ("inner-late", 0.5 + 0.5 * 1e-12),
+        ("inner", 0.5 + 0.5 * 1e-12),
+    ]
+
+
+async def test_simclock_priority_with_zero_tolerance_orders_only_equal_deadlines() -> None:
+    clock = SimClock()
+    log: list[str] = []
+    clock.call_at(0.3 - 1e-15, lambda: log.append("below"))
+    clock.call_at(0.3, lambda: log.append("low"), priority=5)
+    clock.call_at(0.3, lambda: log.append("high"), priority=-5)
+    await clock.advance_to(0.3, rtol=0.0)
+    assert log == ["below", "high", "low"]
+
+
+async def test_simclock_call_at_cancel_past_deadline_and_errors() -> None:
+    clock = SimClock(t0=1.0)
+    log: list[float] = []
+    cancel = clock.call_at(2.0, lambda: log.append(clock.now()))
+    clock.call_at(0.5, lambda: log.append(clock.now()))  # past: runs in the next advance, at now()
+    cancel()
+    await clock.advance_to(3.0)
+    assert log == [1.0]
+
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock.call_at(4.0, boom)
+    with pytest.raises(ValueError, match="boom"):
+        await clock.advance_to(5.0)
+    assert clock.now() == 4.0  # time stays at the failing instant
+
+
+async def test_simclock_settle_runs_after_a_call_at_before_the_instants_next_wake() -> None:
+    """A host's input at ``t`` (priority first) and the work it starts settle before ``t``'s timers wake."""
+    clock = SimClock()
+    log: list[str] = []
+    pending = {"busy": False}
+    done = anyio.Event()
+
+    async def settle() -> bool:
+        if not pending["busy"]:
+            return False
+        await done.wait()
+        pending["busy"] = False
+        return True
+
+    async def handle_input() -> None:
+        await anyio.sleep(0.01)  # real work outside the clock, tracked by the host
+        log.append(f"input@{clock.now()}")
+        done.set()
+
+    async def tick() -> None:
+        async for t in clock.every(1.0):
+            log.append(f"tick@{t}")
+            return
+
+    def deliver(tg: anyio.abc.TaskGroup) -> None:
+        pending["busy"] = True
+        tg.start_soon(handle_input)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(tick)
+        await anyio.wait_all_tasks_blocked()
+        clock.call_at(1.0, lambda: deliver(tg), priority=-1)
+        await clock.advance_to(1.0, settle=settle)
+    assert log == ["input@1.0", "tick@1.0"]
+
+
+async def test_wallclock_accepts_priority() -> None:
+    clock = WallClock()
+    await clock.sleep(0, priority=-1)
+    await clock.wait_until(clock.now(), priority=3)
+    async for _ in clock.every(0.001, first="now", priority=1):
+        break
+
+
+async def test_simclock_entries_registered_during_an_instant_join_its_priority_order() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def high() -> None:
+        log.append("-2")
+        clock.call_at(1.0, lambda: log.append("-1"), priority=-1)  # registered mid-instant, ahead of 0
+
+    async def settle() -> bool:
+        if "-1" in log and "late" not in log:
+            log.append("late")
+            clock.call_at(clock.now(), lambda: log.append("from settle -3"), priority=-3)
+        return False
+
+    clock.call_at(1.0, lambda: log.append("0"))
+    clock.call_at(1.0, high, priority=-2)
+    clock.call_at(1.0, lambda: log.append("1"), priority=1)
+    await clock.advance_to(1.0, settle=settle)
+    assert log == ["-2", "-1", "late", "from settle -3", "0", "1"]
+
+
+async def test_simclock_entries_registered_by_an_instants_last_entry_still_go_by_priority() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def last() -> None:
+        clock.call_at(0.5, lambda: log.append("past, 10"), priority=10)
+        clock.call_at(1.0, lambda: log.append("now, -10"), priority=-10)
+
+    clock.call_at(1.0, last)
+    await clock.advance_to(1.0)
+    assert log == ["now, -10", "past, 10"]
+
+
+async def test_simclock_an_instant_interrupted_by_an_error_keeps_its_order_on_retry() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock.call_at(0.3, boom, priority=-10)
+    clock.call_at(0.3, lambda: log.append("5"), priority=5)
+    clock.call_at(0.1 * 3, lambda: log.append("0"))  # above 0.3, inside the tolerance: same instant
+    with pytest.raises(ValueError, match="boom"):
+        await clock.advance_to(0.3)
+    await clock.advance_to(0.3)
+    assert log == ["0", "5"] and clock.now() == 0.3
+
+
+async def test_simclock_an_instant_at_now_groups_close_deadlines_by_priority() -> None:
+    clock = SimClock(t0=1.0)
+    log: list[tuple[str, float]] = []
+    clock.call_at(1.0, lambda: log.append(("5", clock.now())), priority=5)
+    clock.call_at(1.0 + 1e-12, lambda: log.append(("-5", clock.now())), priority=-5)
+    clock.call_at(1.0, lambda: log.append(("5b", clock.now())), priority=5)
+    await clock.advance_to(2.0)
+    assert log == [("-5", 1.0 + 1e-12), ("5", 1.0 + 1e-12), ("5b", 1.0 + 1e-12)]
+
+
+async def test_simclock_a_re_sleep_close_to_its_instant_is_a_later_instant() -> None:
+    """Registered during the instant, a deadline just past it does not join it (no wake before its deadline)."""
+    clock = SimClock()
+    wakes: list[float] = []
+
+    async def sleeper() -> None:
+        await clock.wait_until(0.5)
+        wakes.append(clock.now())
+        await clock.wait_until(0.5 + 1e-15)
+        wakes.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+    assert wakes == [0.5, 0.5 + 1e-15]
+
+
+async def test_simclock_a_retry_re_forms_the_interrupted_instant_under_its_own_tolerance() -> None:
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock = SimClock()
+    log: list[tuple[str, float]] = []
+    clock.call_at(1.0, boom, priority=-10)
+    clock.call_at(1.0000000005, lambda: log.append(("late", clock.now())))
+    with pytest.raises(ValueError):
+        await clock.advance_to(1.0)
+    await clock.advance_to(1.0, rtol=0.0)
+    assert log == [] and clock.now() == 1.0  # not due without the tolerance
+    clock.call_at(1.0000000002, lambda: log.append(("-5", clock.now())), priority=-5)
+    clock.call_at(1.0000000005, lambda: log.append(("10", clock.now())), priority=10)
+    await clock.advance_to(2.0)
+    assert [name for name, _ in log] == ["-5", "late", "10"]
+    assert {now for _, now in log} == {1.0000000005}
+
+
+async def test_simclock_overdue_entries_from_before_an_instant_keep_their_own_instants() -> None:
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock = SimClock()
+    log: list[str] = []
+    clock.call_at(1.0, boom, priority=-10)
+    clock.call_at(1.0, lambda: log.append("early"), priority=5)
+    clock.call_at(1.0000000005, lambda: log.append("late"), priority=-5)
+    with pytest.raises(ValueError):
+        await clock.advance_to(2.0)
+    await clock.advance_to(2.0, rtol=0.0)
+    assert log == ["early", "late"]
+
+    clock2 = SimClock(t0=1.0)
+    clock2.call_at(0.5, lambda: log.append("0.5"), priority=5)
+    clock2.call_at(0.2, lambda: log.append("0.2"), priority=9)
+    await clock2.advance_to(1.0)
+    assert log[-2:] == ["0.2", "0.5"]
+
+
+async def test_simclock_a_callback_registered_during_an_instant_is_not_hidden_by_older_overdue_entries() -> None:
+    clock = SimClock(t0=1.0)
+    log: list[str] = []
+
+    def a() -> None:
+        log.append("A")
+        clock.call_at(clock.now(), lambda: log.append("D"), priority=-10)
+
+    clock.call_at(0.2, a, priority=-20)
+    clock.call_at(0.2, lambda: log.append("B"), priority=10)
+    clock.call_at(0.5, lambda: log.append("C"))
+    await clock.advance_to(1.0, rtol=0.0)
+    assert log == ["A", "D", "B", "C"]
+
+    clock = SimClock()
+    log.clear()
+
+    def first() -> None:
+        log.append("first")
+        clock.call_at(1.0 + 3e-12, lambda: log.append("new close"), priority=-99)  # past now(): later
+
+    clock.call_at(1.0, first)
+    clock.call_at(1.0 + 2e-12, lambda: log.append("old close"), priority=5)
+    await clock.advance_to(2.0)
+    assert log == ["first", "old close", "new close"]
