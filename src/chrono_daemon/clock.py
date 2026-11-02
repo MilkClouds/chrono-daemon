@@ -260,8 +260,9 @@ class SimClock:
                     return None
                 self._anchor, self._instant_end, self._instant_seq = first.deadline, -math.inf, next(self._seq)
             while (w := self._heap_due(t, rtol, atol)) is not None and (
-                w.deadline <= self._t
-                or (w.seq < self._instant_seq and math.isclose(w.deadline, self._anchor, rel_tol=rtol, abs_tol=atol))
+                math.isclose(w.deadline, self._anchor, rel_tol=rtol, abs_tol=atol)
+                if w.seq < self._instant_seq
+                else w.deadline <= self._t
             ):
                 heapq.heappop(self._waiters)
                 heapq.heappush(self._instant, (w.priority, w.seq, w))

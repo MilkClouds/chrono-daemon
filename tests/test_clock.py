@@ -834,3 +834,24 @@ async def test_simclock_a_retry_re_forms_the_interrupted_instant_under_its_own_t
     await clock.advance_to(2.0)
     assert [name for name, _ in log] == ["-5", "late", "10"]
     assert {now for _, now in log} == {1.0000000005}
+
+
+async def test_simclock_overdue_entries_from_before_an_instant_keep_their_own_instants() -> None:
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock = SimClock()
+    log: list[str] = []
+    clock.call_at(1.0, boom, priority=-10)
+    clock.call_at(1.0, lambda: log.append("early"), priority=5)
+    clock.call_at(1.0000000005, lambda: log.append("late"), priority=-5)
+    with pytest.raises(ValueError):
+        await clock.advance_to(2.0)
+    await clock.advance_to(2.0, rtol=0.0)
+    assert log == ["early", "late"]
+
+    clock2 = SimClock(t0=1.0)
+    clock2.call_at(0.5, lambda: log.append("0.5"), priority=5)
+    clock2.call_at(0.2, lambda: log.append("0.2"), priority=9)
+    await clock2.advance_to(1.0)
+    assert log[-2:] == ["0.2", "0.5"]
