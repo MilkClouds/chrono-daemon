@@ -815,3 +815,22 @@ async def test_simclock_a_re_sleep_close_to_its_instant_is_a_later_instant() -> 
         await anyio.wait_all_tasks_blocked()
         await clock.advance_to(1.0)
     assert wakes == [0.5, 0.5 + 1e-15]
+
+
+async def test_simclock_a_retry_re_forms_the_interrupted_instant_under_its_own_tolerance() -> None:
+    def boom() -> None:
+        raise ValueError("boom")
+
+    clock = SimClock()
+    log: list[tuple[str, float]] = []
+    clock.call_at(1.0, boom, priority=-10)
+    clock.call_at(1.0000000005, lambda: log.append(("late", clock.now())))
+    with pytest.raises(ValueError):
+        await clock.advance_to(1.0)
+    await clock.advance_to(1.0, rtol=0.0)
+    assert log == [] and clock.now() == 1.0  # not due without the tolerance
+    clock.call_at(1.0000000002, lambda: log.append(("-5", clock.now())), priority=-5)
+    clock.call_at(1.0000000005, lambda: log.append(("10", clock.now())), priority=10)
+    await clock.advance_to(2.0)
+    assert [name for name, _ in log] == ["-5", "late", "10"]
+    assert {now for _, now in log} == {1.0000000005}

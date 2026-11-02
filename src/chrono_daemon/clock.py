@@ -129,7 +129,7 @@ class SimClock:
         self._advancing = False
         self._deferred: list[_Waiter] = []  # re-sleeps at the target inside its tolerance, back in the heap after
         # The current instant: its anchor (earliest deadline), latest member deadline, first seq registered during
-        # it, and a heap of its entries by (priority, seq). It survives a failed advance.
+        # it, and a heap of its entries by (priority, seq).
         self._anchor: float | None = None
         self._instant_end = -math.inf
         self._instant_seq = 0
@@ -219,9 +219,13 @@ class SimClock:
             await self._advance_to(t, settle, max_settles, rtol, atol)
         finally:
             self._advancing = False
-            for w in self._deferred:
+            # An instant left by a failure goes back to the heap: the next advance re-forms it under its own target
+            # and tolerance, with anything registered in between.
+            for w in (*self._deferred, *(w for _, _, w in self._instant)):
                 heapq.heappush(self._waiters, w)
-            self._deferred.clear()  # an instant left by a failure stays whole for the next advance
+            self._deferred.clear()
+            self._instant.clear()
+            self._anchor = None
         self._t = t
 
     async def _advance_to(
