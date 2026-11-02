@@ -17,6 +17,8 @@ able to choose, as in discrete-event simulators (SimPy orders events by `(time, 
   0012). Its entries wake in `(priority, registration)` order, one at a time with a settle after each, and all see
   `now() == min(t, latest deadline of the instant)`: no entry wakes before its deadline (but for `t`'s tolerance), and
   time never moves back.
+- Entries registered during an instant (by a woken task, a callback or `settle`) at or before `now()` join its
+  priority order.
 - `SimClock.call_at(deadline, callback, *, priority=0)` schedules a host callback ordered like a sleeper, without a
   task. It returns a cancel function; a past deadline runs in the next advance; an exception from the callback
   propagates out of the advance, leaving time at that instant.

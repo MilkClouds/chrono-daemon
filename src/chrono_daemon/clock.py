@@ -10,7 +10,6 @@ import heapq
 import itertools
 import math
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -129,7 +128,7 @@ class SimClock:
         self._seq = itertools.count()
         self._advancing = False
         self._deferred: list[_Waiter] = []  # re-sleeps at the target inside its tolerance, back in the heap after
-        self._instant: deque[_Waiter] = deque()  # the current instant's due entries, in (priority, seq) order
+        self._instant: list[tuple[int, int, _Waiter]] = []  # heap of the current instant's due entries
 
     def now(self) -> float:
         return self._t
@@ -215,7 +214,7 @@ class SimClock:
             await self._advance_to(t, settle, max_settles, rtol, atol)
         finally:
             self._advancing = False
-            for w in (*self._deferred, *self._instant):
+            for w in (*self._deferred, *(w for _, _, w in self._instant)):
                 heapq.heappush(self._waiters, w)
             self._deferred.clear()
             self._instant.clear()
@@ -244,10 +243,14 @@ class SimClock:
 
         An instant is the earliest due deadline and every due one close to it, taken off the heap at once and served
         in (priority, seq) order at ``min(t, latest deadline)``, so no entry wakes before its deadline (but for
-        ``t``'s tolerance) and time never moves back.
+        ``t``'s tolerance) and time never moves back. Entries registered meanwhile at or before ``now()`` join it.
         """
-        while self._instant and self._instant[0].cancelled:
-            self._instant.popleft()
+        if self._instant:  # entries registered during the instant at or before now() join it
+            while (w := self._heap_due(t, rtol, atol)) is not None and w.deadline <= self._t:
+                heapq.heappop(self._waiters)
+                heapq.heappush(self._instant, (w.priority, w.seq, w))
+        while self._instant and self._instant[0][2].cancelled:
+            heapq.heappop(self._instant)
         if not self._instant:
             if (first := self._heap_due(t, rtol, atol)) is None:
                 return None
@@ -256,10 +259,10 @@ class SimClock:
                 w.deadline, first.deadline, rel_tol=rtol, abs_tol=atol
             ):
                 group.append(heapq.heappop(self._waiters))
-            group.sort(key=lambda w: (w.priority, w.seq))
-            self._instant.extend(group)
+            self._instant = [(w.priority, w.seq, w) for w in group]
+            heapq.heapify(self._instant)
             self._t = max(self._t, min(t, max(w.deadline for w in group)))
-        return self._instant[0] if peek else self._instant.popleft()
+        return self._instant[0][2] if peek else heapq.heappop(self._instant)[2]
 
     def _heap_due(self, t: float, rtol: float, atol: float) -> _Waiter | None:
         """The heap's earliest live entry if it is due by ``t``, else ``None``.

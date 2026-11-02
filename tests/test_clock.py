@@ -737,3 +737,24 @@ async def test_wallclock_accepts_priority() -> None:
     await clock.wait_until(clock.now(), priority=3)
     async for _ in clock.every(0.001, first="now", priority=1):
         break
+
+
+async def test_simclock_entries_registered_during_an_instant_join_its_priority_order() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def high() -> None:
+        log.append("-2")
+        clock.call_at(1.0, lambda: log.append("-1"), priority=-1)  # registered mid-instant, ahead of 0
+
+    async def settle() -> bool:
+        if "-1" in log and "late" not in log:
+            log.append("late")
+            clock.call_at(clock.now(), lambda: log.append("from settle -3"), priority=-3)
+        return False
+
+    clock.call_at(1.0, lambda: log.append("0"))
+    clock.call_at(1.0, high, priority=-2)
+    clock.call_at(1.0, lambda: log.append("1"), priority=1)
+    await clock.advance_to(1.0, settle=settle)
+    assert log == ["-2", "-1", "late", "from settle -3", "0", "1"]
