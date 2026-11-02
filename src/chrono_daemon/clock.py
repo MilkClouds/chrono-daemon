@@ -245,10 +245,10 @@ class SimClock:
         in (priority, seq) order at ``min(t, latest deadline)``, so no entry wakes before its deadline (but for
         ``t``'s tolerance) and time never moves back. Entries registered meanwhile at or before ``now()`` join it.
         """
-        if self._instant:  # entries registered during the instant at or before now() join it
-            while (w := self._heap_due(t, rtol, atol)) is not None and w.deadline <= self._t:
-                heapq.heappop(self._waiters)
-                heapq.heappush(self._instant, (w.priority, w.seq, w))
+        # Entries at or before now() (registered during the instant, or past call_at s) join the instant.
+        while (w := self._heap_due(t, rtol, atol)) is not None and w.deadline <= self._t:
+            heapq.heappop(self._waiters)
+            heapq.heappush(self._instant, (w.priority, w.seq, w))
         while self._instant and self._instant[0][2].cancelled:
             heapq.heappop(self._instant)
         if not self._instant:

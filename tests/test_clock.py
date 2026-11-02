@@ -758,3 +758,16 @@ async def test_simclock_entries_registered_during_an_instant_join_its_priority_o
     clock.call_at(1.0, lambda: log.append("1"), priority=1)
     await clock.advance_to(1.0, settle=settle)
     assert log == ["-2", "-1", "late", "from settle -3", "0", "1"]
+
+
+async def test_simclock_entries_registered_by_an_instants_last_entry_still_go_by_priority() -> None:
+    clock = SimClock()
+    log: list[str] = []
+
+    def last() -> None:
+        clock.call_at(0.5, lambda: log.append("past, 10"), priority=10)
+        clock.call_at(1.0, lambda: log.append("now, -10"), priority=-10)
+
+    clock.call_at(1.0, last)
+    await clock.advance_to(1.0)
+    assert log == ["now, -10", "past, 10"]
