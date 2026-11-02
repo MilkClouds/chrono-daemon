@@ -128,7 +128,12 @@ class SimClock:
         self._seq = itertools.count()
         self._advancing = False
         self._deferred: list[_Waiter] = []  # re-sleeps at the target inside its tolerance, back in the heap after
-        self._instant: list[tuple[int, int, _Waiter]] = []  # heap of the current instant's due entries
+        # The current instant: its anchor (earliest deadline), latest member deadline, first seq registered during
+        # it, and a heap of its entries by (priority, seq). It survives a failed advance.
+        self._anchor: float | None = None
+        self._instant_end = -math.inf
+        self._instant_seq = 0
+        self._instant: list[tuple[int, int, _Waiter]] = []
 
     def now(self) -> float:
         return self._t
@@ -240,28 +245,29 @@ class SimClock:
     def _pop_due(self, t: float, rtol: float, atol: float, *, peek: bool = False) -> _Waiter | None:
         """Remove (or with ``peek``, find) the next entry due by ``t``, or ``None``, setting ``now()`` to its instant.
 
-        An instant is the earliest due deadline and every due one close to it, taken off the heap at once and served
-        in (priority, seq) order at ``min(t, latest deadline)``, so no entry wakes before its deadline (but for
-        ``t``'s tolerance) and time never moves back. Entries registered meanwhile at or before ``now()`` join it.
+        An instant is the earliest due deadline (its anchor) and every due deadline close to it, served in
+        (priority, seq) order at ``min(t, latest deadline)``: no entry wakes before its deadline (but for ``t``'s
+        tolerance) and time never moves back. An entry registered during the instant joins it only at or before
+        ``now()``, so a tiny re-sleep cannot keep it open.
         """
-        # Entries at or before now() (registered during the instant, or past call_at s) join the instant.
-        while (w := self._heap_due(t, rtol, atol)) is not None and w.deadline <= self._t:
-            heapq.heappop(self._waiters)
-            heapq.heappush(self._instant, (w.priority, w.seq, w))
-        while self._instant and self._instant[0][2].cancelled:
-            heapq.heappop(self._instant)
-        if not self._instant:
-            if (first := self._heap_due(t, rtol, atol)) is None:
-                return None
-            group = [heapq.heappop(self._waiters)]
-            while (w := self._heap_due(t, rtol, atol)) is not None and math.isclose(
-                w.deadline, first.deadline, rel_tol=rtol, abs_tol=atol
+        while True:
+            if self._anchor is None:
+                if (first := self._heap_due(t, rtol, atol)) is None:
+                    return None
+                self._anchor, self._instant_end, self._instant_seq = first.deadline, -math.inf, next(self._seq)
+            while (w := self._heap_due(t, rtol, atol)) is not None and (
+                w.deadline <= self._t
+                or (w.seq < self._instant_seq and math.isclose(w.deadline, self._anchor, rel_tol=rtol, abs_tol=atol))
             ):
-                group.append(heapq.heappop(self._waiters))
-            self._instant = [(w.priority, w.seq, w) for w in group]
-            heapq.heapify(self._instant)
-            self._t = max(self._t, min(t, max(w.deadline for w in group)))
-        return self._instant[0][2] if peek else heapq.heappop(self._instant)[2]
+                heapq.heappop(self._waiters)
+                heapq.heappush(self._instant, (w.priority, w.seq, w))
+                self._instant_end = max(self._instant_end, w.deadline)
+            while self._instant and self._instant[0][2].cancelled:
+                heapq.heappop(self._instant)
+            if self._instant:
+                self._t = max(self._t, min(t, self._instant_end))
+                return self._instant[0][2] if peek else heapq.heappop(self._instant)[2]
+            self._anchor = None
 
     def _heap_due(self, t: float, rtol: float, atol: float) -> _Waiter | None:
         """The heap's earliest live entry if it is due by ``t``, else ``None``.

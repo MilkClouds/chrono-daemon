@@ -787,3 +787,31 @@ async def test_simclock_an_instant_interrupted_by_an_error_keeps_its_order_on_re
         await clock.advance_to(0.3)
     await clock.advance_to(0.3)
     assert log == ["0", "5"] and clock.now() == 0.3
+
+
+async def test_simclock_an_instant_at_now_groups_close_deadlines_by_priority() -> None:
+    clock = SimClock(t0=1.0)
+    log: list[tuple[str, float]] = []
+    clock.call_at(1.0, lambda: log.append(("5", clock.now())), priority=5)
+    clock.call_at(1.0 + 1e-12, lambda: log.append(("-5", clock.now())), priority=-5)
+    clock.call_at(1.0, lambda: log.append(("5b", clock.now())), priority=5)
+    await clock.advance_to(2.0)
+    assert log == [("-5", 1.0 + 1e-12), ("5", 1.0 + 1e-12), ("5b", 1.0 + 1e-12)]
+
+
+async def test_simclock_a_re_sleep_close_to_its_instant_is_a_later_instant() -> None:
+    """Registered during the instant, a deadline just past it does not join it (no wake before its deadline)."""
+    clock = SimClock()
+    wakes: list[float] = []
+
+    async def sleeper() -> None:
+        await clock.wait_until(0.5)
+        wakes.append(clock.now())
+        await clock.wait_until(0.5 + 1e-15)
+        wakes.append(clock.now())
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sleeper)
+        await anyio.wait_all_tasks_blocked()
+        await clock.advance_to(1.0)
+    assert wakes == [0.5, 0.5 + 1e-15]
