@@ -855,3 +855,30 @@ async def test_simclock_overdue_entries_from_before_an_instant_keep_their_own_in
     clock2.call_at(0.2, lambda: log.append("0.2"), priority=9)
     await clock2.advance_to(1.0)
     assert log[-2:] == ["0.2", "0.5"]
+
+
+async def test_simclock_a_callback_registered_during_an_instant_is_not_hidden_by_older_overdue_entries() -> None:
+    clock = SimClock(t0=1.0)
+    log: list[str] = []
+
+    def a() -> None:
+        log.append("A")
+        clock.call_at(clock.now(), lambda: log.append("D"), priority=-10)
+
+    clock.call_at(0.2, a, priority=-20)
+    clock.call_at(0.2, lambda: log.append("B"), priority=10)
+    clock.call_at(0.5, lambda: log.append("C"))
+    await clock.advance_to(1.0, rtol=0.0)
+    assert log == ["A", "D", "B", "C"]
+
+    clock = SimClock()
+    log.clear()
+
+    def first() -> None:
+        log.append("first")
+        clock.call_at(1.0 + 3e-12, lambda: log.append("new close"), priority=-99)  # past now(): later
+
+    clock.call_at(1.0, first)
+    clock.call_at(1.0 + 2e-12, lambda: log.append("old close"), priority=5)
+    await clock.advance_to(2.0)
+    assert log == ["first", "old close", "new close"]

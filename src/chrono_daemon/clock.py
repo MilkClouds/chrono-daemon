@@ -167,7 +167,10 @@ class SimClock:
         """Run ``callback()`` in the advance that reaches ``deadline``, ordered like a sleeper there; returns its
         cancel. A past ``deadline`` runs in the next advance. An exception from it propagates out of the advance."""
         waiter = _Waiter(deadline, priority, next(self._seq), None, registered_at=self._t, callback=callback)
-        heapq.heappush(self._waiters, waiter)
+        if self._anchor is not None and deadline <= self._t:  # registered during an instant, due in it
+            heapq.heappush(self._instant, (priority, waiter.seq, waiter))
+        else:
+            heapq.heappush(self._waiters, waiter)
         return waiter.cancel
 
     async def advance(
@@ -251,22 +254,26 @@ class SimClock:
 
         An instant is the earliest due deadline (its anchor) and every due deadline close to it, served in
         (priority, seq) order at ``min(t, latest deadline)``: no entry wakes before its deadline (but for ``t``'s
-        tolerance) and time never moves back. An entry registered during the instant joins it only at or before
-        ``now()``, so a tiny re-sleep cannot keep it open.
+        tolerance) and time never moves back. A ``call_at`` registered during the instant joins it at or before
+        ``now()`` (``call_at`` puts it there); later deadlines, however close, form a later instant.
         """
         while True:
             if self._anchor is None:
                 if (first := self._heap_due(t, rtol, atol)) is None:
                     return None
                 self._anchor, self._instant_end, self._instant_seq = first.deadline, -math.inf, next(self._seq)
-            while (w := self._heap_due(t, rtol, atol)) is not None and (
-                math.isclose(w.deadline, self._anchor, rel_tol=rtol, abs_tol=atol)
-                if w.seq < self._instant_seq
-                else w.deadline <= self._t
+            later: list[_Waiter] = []  # close, but registered during the instant: a later instant
+            while (w := self._heap_due(t, rtol, atol)) is not None and math.isclose(
+                w.deadline, self._anchor, rel_tol=rtol, abs_tol=atol
             ):
                 heapq.heappop(self._waiters)
-                heapq.heappush(self._instant, (w.priority, w.seq, w))
-                self._instant_end = max(self._instant_end, w.deadline)
+                if w.seq < self._instant_seq:
+                    heapq.heappush(self._instant, (w.priority, w.seq, w))
+                    self._instant_end = max(self._instant_end, w.deadline)
+                else:
+                    later.append(w)
+            for w in later:
+                heapq.heappush(self._waiters, w)
             while self._instant and self._instant[0][2].cancelled:
                 heapq.heappop(self._instant)
             if self._instant:
